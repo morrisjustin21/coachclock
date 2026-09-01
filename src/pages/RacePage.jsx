@@ -20,12 +20,12 @@ export default function RacePage({ session }) {
       .channel(`race-${raceId}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'splits', filter: `race_id=eq.${raceId}` },
+        { event: '*', schema: 'coaches_clock', table: 'splits', filter: `race_id=eq.${raceId}` },
         () => loadSplits()
       )
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'athletes', filter: `race_id=eq.${raceId}` },
+        { event: '*', schema: 'coaches_clock', table: 'athletes', filter: `race_id=eq.${raceId}` },
         () => loadRaceAthletes()
       )
       .subscribe()
@@ -234,6 +234,8 @@ function RaceLive({ race, raceAthletes, splits, isOwner }) {
     rafRef.current = requestAnimationFrame(tick)
   }
 
+  const [pendingSplits, setPendingSplits] = useState([])
+
   function handleStartStop() {
     if (!running) {
       startTimeRef.current = Date.now()
@@ -245,25 +247,44 @@ function RaceLive({ race, raceAthletes, splits, isOwner }) {
     }
   }
 
-  const finishedAthleteIds = new Set(splits.map((s) => s.athlete_id))
+  // Merge confirmed splits from the server with any taps still in flight,
+  // so the tap list and results update the instant you click, without
+  // waiting on the round trip to the database.
+  const confirmedAthleteIds = new Set(splits.map((s) => s.athlete_id))
+  const visiblePending = pendingSplits.filter((p) => !confirmedAthleteIds.has(p.athlete_id))
+  const finishedInOrder = [...splits, ...visiblePending].sort(
+    (a, b) => a.recorded_time_ms - b.recorded_time_ms
+  )
+  const finishedAthleteIds = new Set(finishedInOrder.map((s) => s.athlete_id))
   const waiting = raceAthletes.filter((a) => !finishedAthleteIds.has(a.id))
-  const finishedInOrder = splits // already ordered by recorded_time_ms ascending
 
   async function recordFinish(athlete) {
     if (!running) return
     const time = Date.now() - startTimeRef.current
-    await supabase.from('splits').insert({
+    const tempId = `pending-${athlete.id}-${Date.now()}`
+    setPendingSplits((prev) => [
+      ...prev,
+      { id: tempId, athlete_id: athlete.id, label: athlete.name, recorded_time_ms: time },
+    ])
+    const { error } = await supabase.from('splits').insert({
       race_id: race.id,
       athlete_id: athlete.id,
       label: athlete.name,
       recorded_time_ms: time,
     })
+    if (error) {
+      // Insert failed - drop the optimistic entry so the runner reappears in the waiting list
+      setPendingSplits((prev) => prev.filter((p) => p.id !== tempId))
+    }
   }
 
   async function undoLast() {
     if (finishedInOrder.length === 0) return
     const last = finishedInOrder[finishedInOrder.length - 1]
-    await supabase.from('splits').delete().eq('id', last.id)
+    setPendingSplits((prev) => prev.filter((p) => p.athlete_id !== last.athlete_id))
+    if (!String(last.id).startsWith('pending-')) {
+      await supabase.from('splits').delete().eq('id', last.id)
+    }
   }
 
   return (
