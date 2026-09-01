@@ -18,6 +18,7 @@ export default function RaceList({ session }) {
     const { data, error } = await supabase
       .from('races')
       .select('*')
+      .eq('coach_id', session.user.id)
       .order('created_at', { ascending: false })
     if (!error) setRaces(data)
     setLoading(false)
@@ -38,6 +39,19 @@ export default function RaceList({ session }) {
     }
     setName('')
     navigate(`/race/${data.id}`)
+  }
+
+  async function deleteRace(race) {
+    const confirmed = window.confirm(
+      `Delete "${race.name}"? This permanently removes its roster and all recorded times.`
+    )
+    if (!confirmed) return
+    const { error } = await supabase.from('races').delete().eq('id', race.id)
+    if (error) {
+      setError(error.message)
+      return
+    }
+    setRaces((prev) => prev.filter((r) => r.id !== race.id))
   }
 
   async function signOut() {
@@ -79,16 +93,23 @@ export default function RaceList({ session }) {
       ) : (
         <ul className="space-y-2">
           {races.map((r) => (
-            <li key={r.id}>
+            <li key={r.id} className="flex items-center gap-2">
               <Link
                 to={`/race/${r.id}`}
-                className="block border border-gray-200 rounded-lg px-4 py-3 hover:bg-gray-50"
+                className="flex-1 block border border-gray-200 rounded-lg px-4 py-3 hover:bg-gray-50"
               >
                 <div className="font-medium text-sm">{r.name}</div>
                 <div className="text-xs text-gray-500">
                   {new Date(r.created_at).toLocaleDateString()} · {r.status}
                 </div>
               </Link>
+              <button
+                onClick={() => deleteRace(r)}
+                className="text-gray-400 hover:text-red-600 text-sm px-2"
+                aria-label={`Delete ${r.name}`}
+              >
+                ✕
+              </button>
             </li>
           ))}
         </ul>
