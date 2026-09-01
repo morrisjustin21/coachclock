@@ -6,6 +6,7 @@ export default function RaceList({ session }) {
   const [races, setRaces] = useState([])
   const [name, setName] = useState('')
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -25,15 +26,18 @@ export default function RaceList({ session }) {
   async function createRace(e) {
     e.preventDefault()
     if (!name.trim()) return
+    setError('')
     const { data, error } = await supabase
       .from('races')
       .insert({ name: name.trim(), coach_id: session.user.id })
       .select()
       .single()
-    if (!error) {
-      setName('')
-      navigate(`/race/${data.id}`)
+    if (error) {
+      setError(error.message)
+      return
     }
+    setName('')
+    navigate(`/race/${data.id}`)
   }
 
   async function signOut() {
@@ -54,7 +58,7 @@ export default function RaceList({ session }) {
         </div>
       </div>
 
-      <form onSubmit={createRace} className="flex gap-2 mb-8">
+      <form onSubmit={createRace} className="flex gap-2 mb-2">
         <input
           type="text"
           placeholder="New race name (e.g. Duncan Invitational - Varsity Boys)"
@@ -66,6 +70,7 @@ export default function RaceList({ session }) {
           Create
         </button>
       </form>
+      {error && <p className="text-sm text-red-600 mb-6">{error}</p>}
 
       {loading ? (
         <p className="text-sm text-gray-500">Loading...</p>
