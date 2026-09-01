@@ -235,6 +235,8 @@ function RaceLive({ race, raceAthletes, splits, isOwner }) {
   }
 
   const [pendingSplits, setPendingSplits] = useState([])
+  const [removedIds, setRemovedIds] = useState(new Set())
+  const inFlightRef = useRef({}) // tempId -> { cancelled, realId }
 
   function handleStartStop() {
     if (!running) {
@@ -248,11 +250,12 @@ function RaceLive({ race, raceAthletes, splits, isOwner }) {
   }
 
   // Merge confirmed splits from the server with any taps still in flight,
-  // so the tap list and results update the instant you click, without
-  // waiting on the round trip to the database.
+  // minus anything just undone, so the tap list and results update the
+  // instant you click, without waiting on any round trip to the database.
   const confirmedAthleteIds = new Set(splits.map((s) => s.athlete_id))
+  const visibleConfirmed = splits.filter((s) => !removedIds.has(s.id))
   const visiblePending = pendingSplits.filter((p) => !confirmedAthleteIds.has(p.athlete_id))
-  const finishedInOrder = [...splits, ...visiblePending].sort(
+  const finishedInOrder = [...visibleConfirmed, ...visiblePending].sort(
     (a, b) => a.recorded_time_ms - b.recorded_time_ms
   )
   const finishedAthleteIds = new Set(finishedInOrder.map((s) => s.athlete_id))
@@ -262,28 +265,74 @@ function RaceLive({ race, raceAthletes, splits, isOwner }) {
     if (!running) return
     const time = Date.now() - startTimeRef.current
     const tempId = `pending-${athlete.id}-${Date.now()}`
+    inFlightRef.current[tempId] = { cancelled: false, realId: null }
     setPendingSplits((prev) => [
       ...prev,
       { id: tempId, athlete_id: athlete.id, label: athlete.name, recorded_time_ms: time },
     ])
-    const { error } = await supabase.from('splits').insert({
-      race_id: race.id,
-      athlete_id: athlete.id,
-      label: athlete.name,
-      recorded_time_ms: time,
-    })
+
+    const { data, error } = await supabase
+      .from('splits')
+      .insert({
+        race_id: race.id,
+        athlete_id: athlete.id,
+        label: athlete.name,
+        recorded_time_ms: time,
+      })
+      .select()
+      .single()
+
+    const flight = inFlightRef.current[tempId]
+
     if (error) {
       // Insert failed - drop the optimistic entry so the runner reappears in the waiting list
       setPendingSplits((prev) => prev.filter((p) => p.id !== tempId))
+      delete inFlightRef.current[tempId]
+      return
     }
+
+    if (flight?.cancelled) {
+      // Undo was pressed before this save finished - delete the row that just
+      // landed so the runner doesn't silently reappear a moment later.
+      await supabase.from('splits').delete().eq('id', data.id)
+      setPendingSplits((prev) => prev.filter((p) => p.id !== tempId))
+      delete inFlightRef.current[tempId]
+      return
+    }
+
+    // Save succeeded and wasn't cancelled - record its real id in case Undo
+    // is pressed before realtime delivers the confirmed row from the server.
+    if (flight) flight.realId = data.id
   }
 
   async function undoLast() {
     if (finishedInOrder.length === 0) return
     const last = finishedInOrder[finishedInOrder.length - 1]
-    setPendingSplits((prev) => prev.filter((p) => p.athlete_id !== last.athlete_id))
-    if (!String(last.id).startsWith('pending-')) {
-      await supabase.from('splits').delete().eq('id', last.id)
+
+    if (String(last.id).startsWith('pending-')) {
+      const flight = inFlightRef.current[last.id]
+      // Remove from view immediately either way
+      setPendingSplits((prev) => prev.filter((p) => p.id !== last.id))
+      if (flight?.realId) {
+        // The save already finished - delete the confirmed row now
+        await supabase.from('splits').delete().eq('id', flight.realId)
+        delete inFlightRef.current[last.id]
+      } else if (flight) {
+        // Still saving - mark it so it gets deleted the moment it lands
+        flight.cancelled = true
+      }
+    } else {
+      // Already-confirmed finish - hide it immediately, then delete for real
+      setRemovedIds((prev) => new Set(prev).add(last.id))
+      const { error } = await supabase.from('splits').delete().eq('id', last.id)
+      if (error) {
+        // Delete failed - bring it back
+        setRemovedIds((prev) => {
+          const next = new Set(prev)
+          next.delete(last.id)
+          return next
+        })
+      }
     }
   }
 
