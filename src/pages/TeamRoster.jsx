@@ -60,9 +60,32 @@ export default function TeamRoster({ session }) {
     setError('')
     const lines = bulkText.split('\n').map((l) => l.trim()).filter(Boolean)
     if (lines.length === 0) return
+
     const rows = lines.map((line) => {
-      const parts = line.split(',').map((p) => p.trim())
-      const [n, b, g, gen] = parts
+      // Accept either tab-separated (e.g. pasted straight from a spreadsheet)
+      // or comma-separated input.
+      const parts = (line.includes('\t') ? line.split('\t') : line.split(','))
+        .map((p) => p.trim())
+        .filter((p) => p !== '')
+
+      let n = '',
+        b = null,
+        g = null,
+        gen = null
+
+      if (parts.length >= 4) {
+        // Name, Bib, Grade, Gender
+        ;[n, b, g, gen] = parts
+      } else if (parts.length === 3) {
+        // Name, Grade, Gender (no bib)
+        ;[n, g, gen] = parts
+      } else if (parts.length === 2) {
+        // Name, Grade (no bib or gender)
+        ;[n, g] = parts
+      } else {
+        n = parts[0]
+      }
+
       return {
         coach_id: session.user.id,
         name: n,
@@ -71,6 +94,7 @@ export default function TeamRoster({ session }) {
         gender: gen ? gen.toUpperCase().slice(0, 1) : null,
       }
     })
+
     const { error } = await supabase.from('team_athletes').insert(rows)
     if (error) {
       setError(error.message)
@@ -175,11 +199,14 @@ export default function TeamRoster({ session }) {
         <form onSubmit={addBulk} className="mt-2 space-y-2">
           <textarea
             placeholder={
-              'One per line: Name, Bib, Grade, Gender (M or F)\nJordan Smith, 101, 11, F\nAlex Lee, 102, 9, M'
+              'One per line. Works with tabs (pasted from a spreadsheet) or commas.\n' +
+              'Accepted formats:\n' +
+              'Name, Grade, Gender  ->  Asher Covington, 6, M\n' +
+              'Name, Bib, Grade, Gender  ->  Asher Covington, 101, 6, M'
             }
             value={bulkText}
             onChange={(e) => setBulkText(e.target.value)}
-            rows={5}
+            rows={6}
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
           />
           <button className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium">
