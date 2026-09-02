@@ -222,15 +222,20 @@ function RaceSetup({ race, teamAthletes, onStarted }) {
 function RaceLive({ race, raceAthletes, splits, isOwner }) {
   const [running, setRunning] = useState(false)
   const [elapsed, setElapsed] = useState(0)
-  const startTimeRef = useRef(null)
+  const startTimeRef = useRef(null) // when the current run segment began
+  const accumulatedRef = useRef(0) // total elapsed time from all prior run segments
   const rafRef = useRef(null)
 
   useEffect(() => {
     return () => cancelAnimationFrame(rafRef.current)
   }, [])
 
+  function currentElapsed() {
+    return accumulatedRef.current + (running ? Date.now() - startTimeRef.current : 0)
+  }
+
   function tick() {
-    setElapsed(Date.now() - startTimeRef.current)
+    setElapsed(accumulatedRef.current + (Date.now() - startTimeRef.current))
     rafRef.current = requestAnimationFrame(tick)
   }
 
@@ -240,13 +245,34 @@ function RaceLive({ race, raceAthletes, splits, isOwner }) {
 
   function handleStartStop() {
     if (!running) {
+      // Resume: pick up from however much time had already accumulated
       startTimeRef.current = Date.now()
       setRunning(true)
       tick()
     } else {
+      // Pause: bank the elapsed time from this segment, don't reset to zero
+      accumulatedRef.current += Date.now() - startTimeRef.current
+      setElapsed(accumulatedRef.current)
       setRunning(false)
       cancelAnimationFrame(rafRef.current)
     }
+  }
+
+  async function resetRace() {
+    const confirmed = window.confirm(
+      'Reset this race? This clears the clock and permanently deletes every recorded time. This cannot be undone.'
+    )
+    if (!confirmed) return
+
+    setRunning(false)
+    cancelAnimationFrame(rafRef.current)
+    accumulatedRef.current = 0
+    setElapsed(0)
+    setPendingSplits([])
+    setRemovedIds(new Set())
+    inFlightRef.current = {}
+
+    await supabase.from('splits').delete().eq('race_id', race.id)
   }
 
   // Merge confirmed splits from the server with any taps still in flight,
@@ -263,7 +289,7 @@ function RaceLive({ race, raceAthletes, splits, isOwner }) {
 
   async function recordFinish(athlete) {
     if (!running) return
-    const time = Date.now() - startTimeRef.current
+    const time = currentElapsed()
     const tempId = `pending-${athlete.id}-${Date.now()}`
     inFlightRef.current[tempId] = { cancelled: false, realId: null }
     setPendingSplits((prev) => [
@@ -345,7 +371,7 @@ function RaceLive({ race, raceAthletes, splits, isOwner }) {
           </div>
           <div className="flex gap-2 justify-center mb-2">
             <button onClick={handleStartStop} className="min-w-[100px] border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium">
-              {running ? 'Stop' : 'Start'}
+              {running ? 'Stop' : elapsed > 0 ? 'Resume' : 'Start'}
             </button>
             <button
               onClick={undoLast}
@@ -353,6 +379,12 @@ function RaceLive({ race, raceAthletes, splits, isOwner }) {
               className="border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-40"
             >
               Undo
+            </button>
+            <button
+              onClick={resetRace}
+              className="border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm font-medium"
+            >
+              Reset race
             </button>
           </div>
           <p className="text-xs text-gray-400 text-center mb-6">Tap a name below as each runner crosses the line</p>
