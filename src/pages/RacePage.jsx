@@ -2,6 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { formatTime, downloadCSV, downloadReportCSV, buildReportRows } from '../lib/csv'
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 const CHECKPOINT_PRESETS = ['1000m', '2000m', '3000m', '4000m', '1mi', '2mi', '3mi', 'Finish']
 
@@ -146,6 +154,37 @@ export default function RacePage({ session }) {
   )
 }
 
+function SortableRosterRow({ item, index, onRemove }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: item.key,
+  })
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 10 : 'auto',
+    position: 'relative',
+  }
+
+  return (
+    <li ref={setNodeRef} style={style} className="flex items-center gap-2 px-3 py-2 text-sm bg-white">
+      <span className="text-gray-400 w-5">{index + 1}</span>
+      <button
+        {...attributes}
+        {...listeners}
+        className="text-gray-400 cursor-grab active:cursor-grabbing px-1 touch-none"
+        aria-label="Drag to reorder"
+      >
+        ⠿
+      </button>
+      <span className="flex-1">{item.name}</span>
+      <button onClick={() => onRemove(item.key)} className="text-gray-400 hover:text-red-600 px-1" aria-label="Remove">
+        ✕
+      </button>
+    </li>
+  )
+}
+
 function RaceSetup({ race, teamAthletes, onStarted }) {
   const [roster, setRoster] = useState([]) // { key, team_athlete_id, name, bib }
   const [oneOffName, setOneOffName] = useState('')
@@ -156,6 +195,31 @@ function RaceSetup({ race, teamAthletes, onStarted }) {
 
   function isSelected(teamAthleteId) {
     return roster.some((r) => r.team_athlete_id === teamAthleteId)
+  }
+
+  const allTeamSelected = teamAthletes.length > 0 && teamAthletes.every((a) => isSelected(a.id))
+
+  function toggleSelectAll() {
+    if (allTeamSelected) {
+      setRoster(roster.filter((r) => r.team_athlete_id === null))
+    } else {
+      const missing = teamAthletes
+        .filter((a) => !isSelected(a.id))
+        .map((a) => ({ key: a.id, team_athlete_id: a.id, name: a.name, bib: a.bib }))
+      setRoster([...roster, ...missing])
+    }
+  }
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  function handleRosterDragEnd(event) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    setRoster((prev) => {
+      const oldIndex = prev.findIndex((r) => r.key === active.id)
+      const newIndex = prev.findIndex((r) => r.key === over.id)
+      return arrayMove(prev, oldIndex, newIndex)
+    })
   }
 
   function toggleTeamAthlete(a) {
@@ -174,14 +238,6 @@ function RaceSetup({ race, teamAthletes, onStarted }) {
       { key: `oneoff-${Date.now()}`, team_athlete_id: null, name: oneOffName.trim(), bib: null },
     ])
     setOneOffName('')
-  }
-
-  function move(index, dir) {
-    const next = [...roster]
-    const target = index + dir
-    if (target < 0 || target >= next.length) return
-    ;[next[index], next[target]] = [next[target], next[index]]
-    setRoster(next)
   }
 
   function remove(key) {
@@ -236,8 +292,6 @@ function RaceSetup({ race, teamAthletes, onStarted }) {
       sort_order: i,
     }))
 
-    // Default to a single Finish checkpoint if the coach didn't set any up -
-    // keeps the simple single-coach case friction-free.
     const checkpointRows =
       checkpointList.length > 0
         ? checkpointList.map((c, i) => ({ race_id: race.id, label: c.label, sort_order: i }))
@@ -266,7 +320,12 @@ function RaceSetup({ race, teamAthletes, onStarted }) {
 
       {teamAthletes.length > 0 && (
         <div className="mb-4">
-          <h2 className="text-sm font-medium text-gray-700 mb-2">Team roster</h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-medium text-gray-700">Team roster</h2>
+            <button onClick={toggleSelectAll} className="text-xs text-gray-500 underline">
+              {allTeamSelected ? 'Deselect all' : 'Select all'}
+            </button>
+          </div>
           <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-56 overflow-y-auto">
             {teamAthletes.map((a) => (
               <label key={a.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer">
@@ -296,32 +355,21 @@ function RaceSetup({ race, teamAthletes, onStarted }) {
       {roster.length === 0 ? (
         <p className="text-sm text-gray-400 mb-6">Select athletes above to build the order.</p>
       ) : (
-        <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6">
-          {roster.map((r, i) => (
-            <li key={r.key} className="flex items-center gap-2 px-3 py-2 text-sm">
-              <span className="text-gray-400 w-5">{i + 1}</span>
-              <span className="flex-1">{r.name}</span>
-              <button onClick={() => move(i, -1)} disabled={i === 0} className="text-gray-400 disabled:opacity-30 px-1" aria-label="Move up">
-                ↑
-              </button>
-              <button
-                onClick={() => move(i, 1)}
-                disabled={i === roster.length - 1}
-                className="text-gray-400 disabled:opacity-30 px-1"
-                aria-label="Move down"
-              >
-                ↓
-              </button>
-              <button onClick={() => remove(r.key)} className="text-gray-400 hover:text-red-600 px-1" aria-label="Remove">
-                ✕
-              </button>
-            </li>
-          ))}
-        </ul>
+        <p className="text-xs text-gray-400 mb-2">Drag the ⠿ handle to reorder</p>
+      )}
+      {roster.length > 0 && (
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRosterDragEnd}>
+          <SortableContext items={roster.map((r) => r.key)} strategy={verticalListSortingStrategy}>
+            <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6 overflow-hidden">
+              {roster.map((r, i) => (
+                <SortableRosterRow key={r.key} item={r} index={i} onRemove={remove} />
+              ))}
+            </ul>
+          </SortableContext>
+        </DndContext>
       )}
 
-      <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>
-      <p className="text-xs text-gray-500 mb-2">
+      <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>      <p className="text-xs text-gray-500 mb-2">
         Optional. Add a checkpoint for every spot on the course a coach will be timing from, in
         order. Leave empty for a simple single finish-line race.
       </p>
@@ -411,8 +459,6 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
   const [activeCheckpointId, setActiveCheckpointId] = useState(null)
   const rafRef = useRef(null)
 
-  // Local optimistic mirror of the shared race clock, so the device that
-  // clicked Start/Stop/Reset feels instant while other devices sync via realtime.
   const [localRace, setLocalRace] = useState(race)
   const [elapsed, setElapsed] = useState(computeElapsed(race))
 
@@ -439,9 +485,9 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
     }
   }, [checkpoints.length])
 
-  const [pendingSplits, setPendingSplits] = useState([]) // { id, athlete_id, checkpoint_id, label, recorded_time_ms }
+  const [pendingSplits, setPendingSplits] = useState([])
   const [removedIds, setRemovedIds] = useState(new Set())
-  const inFlightRef = useRef({}) // tempId -> { cancelled, realId }
+  const inFlightRef = useRef({})
 
   async function handleStartStop() {
     if (!localRace.running) {
@@ -488,8 +534,6 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
   )
   const finishedAthleteIds = new Set(finishedInOrder.map((s) => s.athlete_id))
 
-  // Order the waiting list by whoever already reached the previous checkpoint first;
-  // runners with no prior-checkpoint time yet fall back to the original predicted order.
   let waiting = raceAthletes.filter((a) => !finishedAthleteIds.has(a.id))
   if (prevCheckpoint) {
     const prevTimes = {}
