@@ -29,7 +29,10 @@ export default function JoinRace({ session }) {
 
     const { error: joinError } = await supabase
       .from('race_coaches')
-      .upsert({ race_id: race.id, coach_id: session.user.id }, { onConflict: 'race_id,coach_id' })
+      .upsert(
+        { race_id: race.id, coach_id: session.user.id },
+        { onConflict: 'race_id,coach_id', ignoreDuplicates: true }
+      )
 
     setLoading(false)
 
