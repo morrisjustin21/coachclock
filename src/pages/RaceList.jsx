@@ -2,11 +2,21 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 
+function generateJoinCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // no 0/O/1/I to avoid confusion
+  let code = ''
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)]
+  }
+  return code
+}
+
 export default function RaceList({ session }) {
   const [races, setRaces] = useState([])
   const [name, setName] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [copiedId, setCopiedId] = useState(null)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -28,17 +38,27 @@ export default function RaceList({ session }) {
     e.preventDefault()
     if (!name.trim()) return
     setError('')
-    const { data, error } = await supabase
-      .from('races')
-      .insert({ name: name.trim(), coach_id: session.user.id })
-      .select()
-      .single()
-    if (error) {
-      setError(error.message)
-      return
+
+    // Try a couple of times in the rare case of a join code collision
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { data, error } = await supabase
+        .from('races')
+        .insert({ name: name.trim(), coach_id: session.user.id, join_code: generateJoinCode() })
+        .select()
+        .single()
+
+      if (!error) {
+        setName('')
+        navigate(`/race/${data.id}`)
+        return
+      }
+      if (!String(error.message).toLowerCase().includes('join_code')) {
+        setError(error.message)
+        return
+      }
+      // otherwise loop and retry with a fresh code
     }
-    setName('')
-    navigate(`/race/${data.id}`)
+    setError('Could not create race after a few attempts. Please try again.')
   }
 
   async function deleteRace(race) {
@@ -54,6 +74,16 @@ export default function RaceList({ session }) {
     setRaces((prev) => prev.filter((r) => r.id !== race.id))
   }
 
+  async function copyCode(race) {
+    try {
+      await navigator.clipboard.writeText(race.join_code)
+      setCopiedId(race.id)
+      setTimeout(() => setCopiedId(null), 1500)
+    } catch {
+      // Clipboard API can fail on some browsers/permissions - fail silently, code is shown anyway
+    }
+  }
+
   async function signOut() {
     await supabase.auth.signOut()
   }
@@ -63,6 +93,9 @@ export default function RaceList({ session }) {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-xl font-semibold">Your races</h1>
         <div className="flex items-center gap-4">
+          <Link to="/join" className="text-sm text-gray-500 underline">
+            Join a race
+          </Link>
           <Link to="/roster" className="text-sm text-gray-500 underline">
             Team roster
           </Link>
@@ -93,23 +126,32 @@ export default function RaceList({ session }) {
       ) : (
         <ul className="space-y-2">
           {races.map((r) => (
-            <li key={r.id} className="flex items-center gap-2">
-              <Link
-                to={`/race/${r.id}`}
-                className="flex-1 block border border-gray-200 rounded-lg px-4 py-3 hover:bg-gray-50"
-              >
-                <div className="font-medium text-sm">{r.name}</div>
-                <div className="text-xs text-gray-500">
-                  {new Date(r.created_at).toLocaleDateString()} · {r.status}
-                </div>
-              </Link>
-              <button
-                onClick={() => deleteRace(r)}
-                className="text-gray-400 hover:text-red-600 text-sm px-2"
-                aria-label={`Delete ${r.name}`}
-              >
-                ✕
-              </button>
+            <li key={r.id} className="border border-gray-200 rounded-lg px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Link to={`/race/${r.id}`} className="flex-1 block hover:opacity-70">
+                  <div className="font-medium text-sm">{r.name}</div>
+                  <div className="text-xs text-gray-500">
+                    {new Date(r.created_at).toLocaleDateString()} · {r.status}
+                  </div>
+                </Link>
+                <button
+                  onClick={() => deleteRace(r)}
+                  className="text-gray-400 hover:text-red-600 text-sm px-2"
+                  aria-label={`Delete ${r.name}`}
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
+                <span className="text-xs text-gray-400">Join code:</span>
+                <span className="text-xs font-mono font-semibold tracking-wider">{r.join_code}</span>
+                <button
+                  onClick={() => copyCode(r)}
+                  className="text-xs text-gray-500 underline ml-1"
+                >
+                  {copiedId === r.id ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
             </li>
           ))}
         </ul>
