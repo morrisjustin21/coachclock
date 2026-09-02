@@ -125,7 +125,7 @@ export default function RacePage({ session }) {
       <h1 className="text-xl font-semibold mt-2 mb-1">{race.name}</h1>
 
       {isOwner && race.status === 'setup' && (
-        <RaceSetup race={race} teamAthletes={teamAthletes} onStarted={loadAll} />
+        <RaceSetup race={race} teamAthletes={teamAthletes} onStarted={loadAll} session={session} />
       )}
 
       {race.status !== 'setup' && !showReport && (
@@ -185,13 +185,91 @@ function SortableRosterRow({ item, index, onRemove }) {
   )
 }
 
-function RaceSetup({ race, teamAthletes, onStarted }) {
+function RaceSetup({ race, teamAthletes, onStarted, session }) {
   const [roster, setRoster] = useState([]) // { key, team_athlete_id, name, bib }
   const [oneOffName, setOneOffName] = useState('')
   const [checkpointList, setCheckpointList] = useState([]) // { key, label }
   const [customCheckpoint, setCustomCheckpoint] = useState('')
   const [starting, setStarting] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [predictedTimes, setPredictedTimes] = useState({}) // team_athlete_id -> { time, raceId }
+
+  useEffect(() => {
+    loadPredictedOrder()
+  }, [])
+
+  async function loadPredictedOrder() {
+    if (!session) return
+
+    const { data: races } = await supabase
+      .from('races')
+      .select('id, created_at')
+      .eq('coach_id', session.user.id)
+      .order('created_at', { ascending: false })
+    if (!races || races.length === 0) return
+
+    const raceIds = races.map((r) => r.id)
+    const raceRecency = {}
+    races.forEach((r, i) => {
+      raceRecency[r.id] = i // 0 = most recent
+    })
+
+    const [{ data: pastAthletes }, { data: pastCheckpoints }, { data: pastSplits }] = await Promise.all([
+      supabase.from('athletes').select('id, race_id, team_athlete_id').in('race_id', raceIds),
+      supabase.from('checkpoints').select('id, race_id, sort_order').in('race_id', raceIds),
+      supabase.from('splits').select('athlete_id, race_id, checkpoint_id, recorded_time_ms').in('race_id', raceIds),
+    ])
+    if (!pastAthletes || !pastCheckpoints || !pastSplits) return
+
+    // Find each past race's final checkpoint (highest sort_order)
+    const lastCheckpointByRace = {}
+    const lastSortOrderByRace = {}
+    pastCheckpoints.forEach((cp) => {
+      if (lastSortOrderByRace[cp.race_id] === undefined || cp.sort_order > lastSortOrderByRace[cp.race_id]) {
+        lastSortOrderByRace[cp.race_id] = cp.sort_order
+        lastCheckpointByRace[cp.race_id] = cp.id
+      }
+    })
+
+    // Map each race-specific athlete row back to the team roster athlete it came from
+    const athleteRowToTeamId = {}
+    pastAthletes.forEach((a) => {
+      athleteRowToTeamId[a.id] = a.team_athlete_id
+    })
+
+    const finishSplits = pastSplits.filter((s) => s.checkpoint_id === lastCheckpointByRace[s.race_id])
+
+    const predicted = {}
+    finishSplits.forEach((s) => {
+      const teamId = athleteRowToTeamId[s.athlete_id]
+      if (!teamId) return
+      const existing = predicted[teamId]
+      if (!existing || raceRecency[s.race_id] < raceRecency[existing.raceId]) {
+        predicted[teamId] = { time: s.recorded_time_ms, raceId: s.race_id }
+      }
+    })
+
+    setPredictedTimes(predicted)
+  }
+
+  // Insert a new roster entry into its predicted-order position based on past
+  // finish times, without disturbing any positions the coach has manually
+  // dragged already. Athletes with no race history go to the end.
+  function insertByPredictedOrder(list, item) {
+    const newTime = predictedTimes[item.team_athlete_id]?.time
+    if (newTime == null) return [...list, item]
+    let insertIndex = list.length
+    for (let i = 0; i < list.length; i++) {
+      const t = predictedTimes[list[i].team_athlete_id]?.time
+      if (t == null || t > newTime) {
+        insertIndex = i
+        break
+      }
+    }
+    const next = [...list]
+    next.splice(insertIndex, 0, item)
+    return next
+  }
 
   function isSelected(teamAthleteId) {
     return roster.some((r) => r.team_athlete_id === teamAthleteId)
@@ -206,7 +284,20 @@ function RaceSetup({ race, teamAthletes, onStarted }) {
       const missing = teamAthletes
         .filter((a) => !isSelected(a.id))
         .map((a) => ({ key: a.id, team_athlete_id: a.id, name: a.name, bib: a.bib }))
-      setRoster([...roster, ...missing])
+        // Add fastest-known-first so they slot in relative to each other correctly
+        .sort((a, b) => {
+          const ta = predictedTimes[a.team_athlete_id]?.time
+          const tb = predictedTimes[b.team_athlete_id]?.time
+          if (ta == null && tb == null) return 0
+          if (ta == null) return 1
+          if (tb == null) return -1
+          return ta - tb
+        })
+      let next = roster
+      missing.forEach((item) => {
+        next = insertByPredictedOrder(next, item)
+      })
+      setRoster(next)
     }
   }
 
@@ -226,7 +317,7 @@ function RaceSetup({ race, teamAthletes, onStarted }) {
     if (isSelected(a.id)) {
       setRoster(roster.filter((r) => r.team_athlete_id !== a.id))
     } else {
-      setRoster([...roster, { key: a.id, team_athlete_id: a.id, name: a.name, bib: a.bib }])
+      setRoster(insertByPredictedOrder(roster, { key: a.id, team_athlete_id: a.id, name: a.name, bib: a.bib }))
     }
   }
 
@@ -238,6 +329,14 @@ function RaceSetup({ race, teamAthletes, onStarted }) {
       { key: `oneoff-${Date.now()}`, team_athlete_id: null, name: oneOffName.trim(), bib: null },
     ])
     setOneOffName('')
+  }
+
+  function move(index, dir) {
+    const next = [...roster]
+    const target = index + dir
+    if (target < 0 || target >= next.length) return
+    ;[next[index], next[target]] = [next[target], next[index]]
+    setRoster(next)
   }
 
   function remove(key) {
@@ -355,9 +454,12 @@ function RaceSetup({ race, teamAthletes, onStarted }) {
       {roster.length === 0 ? (
         <p className="text-sm text-gray-400 mb-6">Select athletes above to build the order.</p>
       ) : (
-        <p className="text-xs text-gray-400 mb-2">Drag the ⠿ handle to reorder</p>
-      )}
-      {roster.length > 0 && (
+        <p className="text-xs text-gray-400 mb-2">
+          {Object.keys(predictedTimes).length > 0
+            ? 'Auto-sorted by each runner\'s most recent finish time — drag the ⠿ handle to adjust'
+            : 'Drag the ⠿ handle to reorder'}
+        </p>
+      )}      {roster.length > 0 && (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRosterDragEnd}>
           <SortableContext items={roster.map((r) => r.key)} strategy={verticalListSortingStrategy}>
             <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6 overflow-hidden">
@@ -369,7 +471,8 @@ function RaceSetup({ race, teamAthletes, onStarted }) {
         </DndContext>
       )}
 
-      <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>      <p className="text-xs text-gray-500 mb-2">
+      <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>
+      <p className="text-xs text-gray-500 mb-2">
         Optional. Add a checkpoint for every spot on the course a coach will be timing from, in
         order. Leave empty for a simple single finish-line race.
       </p>
