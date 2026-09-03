@@ -67,10 +67,11 @@ export default function RacePage({ session }) {
     const { data } = await supabase.from('races').select('*').eq('id', raceId).single()
     setRace(data)
     if (data && data.coach_id === session?.user?.id) {
-      const { data: team } = await supabase
-        .from('team_athletes')
-        .select('*')
-        .order('name', { ascending: true })
+      let query = supabase.from('team_athletes').select('*').order('name', { ascending: true })
+      query = data.team_id
+        ? query.eq('team_id', data.team_id) // whole team's shared roster for this race's team
+        : query.is('team_id', null).eq('coach_id', session.user.id) // solo race - just your untagged athletes
+      const { data: team } = await query
       if (team) setTeamAthletes(team)
     }
   }
