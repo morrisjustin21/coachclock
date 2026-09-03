@@ -109,6 +109,20 @@ export default function TeamRoster({ session }) {
     loadRoster()
   }
 
+  async function deleteAll() {
+    if (athletes.length === 0) return
+    const confirmed = window.confirm(
+      `Delete all ${athletes.length} athletes from your team roster? This cannot be undone. Past races you've already run are not affected.`
+    )
+    if (!confirmed) return
+    const { error } = await supabase.from('team_athletes').delete().eq('coach_id', session.user.id)
+    if (error) {
+      setError(error.message)
+      return
+    }
+    loadRoster()
+  }
+
   const filtered = athletes.filter((a) => {
     if (genderFilter !== 'all' && a.gender !== genderFilter) return false
     if (gradeFilter !== 'all' && a.grade !== gradeFilter) return false
@@ -143,7 +157,14 @@ export default function TeamRoster({ session }) {
       <Link to="/" className="text-sm text-gray-500 underline">
         &larr; All races
       </Link>
-      <h1 className="text-xl font-semibold mt-2 mb-1">Team roster</h1>
+      <div className="flex items-center justify-between mt-2 mb-1">
+        <h1 className="text-xl font-semibold">Team roster</h1>
+        {athletes.length > 0 && (
+          <button onClick={deleteAll} className="text-xs text-red-600 underline">
+            Delete all
+          </button>
+        )}
+      </div>
       <p className="text-sm text-gray-500 mb-6">
         Build this once, then pick from it when setting up each race.
       </p>
