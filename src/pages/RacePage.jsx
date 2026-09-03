@@ -1,979 +1,204 @@
-import { useEffect, useRef, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
-import { formatTime, downloadCSV, downloadReportCSV, buildReportRows } from '../lib/csv'
-import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
-import {
-  arrayMove,
-  SortableContext,
-  verticalListSortingStrategy,
-  useSortable,
-} from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
 
-const CHECKPOINT_PRESETS = ['1000m', '2000m', '3000m', '4000m', '1mi', '2mi', '3mi', 'Finish']
+function generateJoinCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // no 0/O/1/I to avoid confusion
+  let code = ''
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)]
+  }
+  return code
+}
 
-export default function RacePage({ session }) {
-  const { raceId } = useParams()
-  const [race, setRace] = useState(null)
-  const [teamAthletes, setTeamAthletes] = useState([])
-  const [raceAthletes, setRaceAthletes] = useState([])
-  const [checkpoints, setCheckpoints] = useState([])
-  const [splits, setSplits] = useState([])
-  const [isParticipant, setIsParticipant] = useState(false)
+export default function RaceList({ session }) {
+  const [races, setRaces] = useState([])
+  const [teamId, setTeamId] = useState(null)
+  const [name, setName] = useState('')
   const [loading, setLoading] = useState(true)
-  const [showReport, setShowReport] = useState(false)
-
-  const isOwner = session && race && race.coach_id === session.user.id
-  const canRecord = isOwner || isParticipant
+  const [error, setError] = useState('')
+  const [copiedId, setCopiedId] = useState(null)
+  const navigate = useNavigate()
 
   useEffect(() => {
-    loadAll()
+    loadRaces()
+  }, [])
 
-    const channel = supabase
-      .channel(`race-${raceId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'coaches_clock', table: 'splits', filter: `race_id=eq.${raceId}` },
-        () => loadSplits()
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'coaches_clock', table: 'athletes', filter: `race_id=eq.${raceId}` },
-        () => loadRaceAthletes()
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'coaches_clock', table: 'checkpoints', filter: `race_id=eq.${raceId}` },
-        () => loadCheckpoints()
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'coaches_clock', table: 'races', filter: `id=eq.${raceId}` },
-        () => loadRace()
-      )
-      .subscribe()
-
-    return () => supabase.removeChannel(channel)
-  }, [raceId])
-
-  async function loadAll() {
+  async function loadRaces() {
     setLoading(true)
-    await Promise.all([loadRace(), loadRaceAthletes(), loadCheckpoints(), loadSplits(), loadParticipation()])
+
+    const { data: membership } = await supabase
+      .from('team_members')
+      .select('team_id')
+      .eq('coach_id', session.user.id)
+      .maybeSingle()
+    const myTeamId = membership?.team_id || null
+    setTeamId(myTeamId)
+
+    const { data: ownRaces } = await supabase
+      .from('races')
+      .select('*')
+      .eq('coach_id', session.user.id)
+      .order('created_at', { ascending: false })
+
+    let combined = ownRaces || []
+
+    if (myTeamId) {
+      const { data: teamRaces } = await supabase
+        .from('races')
+        .select('*')
+        .eq('team_id', myTeamId)
+        .order('created_at', { ascending: false })
+      const existingIds = new Set(combined.map((r) => r.id))
+      combined = [...combined, ...(teamRaces || []).filter((r) => !existingIds.has(r.id))]
+      combined.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    }
+
+    setRaces(combined)
     setLoading(false)
   }
 
-  async function loadRace() {
-    const { data } = await supabase.from('races').select('*').eq('id', raceId).single()
-    setRace(data)
-    if (data && data.coach_id === session?.user?.id) {
-      const { data: team } = await supabase
-        .from('team_athletes')
-        .select('*')
-        .order('name', { ascending: true })
-      if (team) setTeamAthletes(team)
-    }
-  }
+  async function createRace(e) {
+    e.preventDefault()
+    if (!name.trim()) return
+    setError('')
 
-  async function loadParticipation() {
-    if (!session) return
-
-    const { data: raceRow } = await supabase.from('races').select('team_id').eq('id', raceId).maybeSingle()
-
-    const { data: raceCoachRow } = await supabase
-      .from('race_coaches')
-      .select('id')
-      .eq('race_id', raceId)
-      .eq('coach_id', session.user.id)
-      .maybeSingle()
-
-    let isTeamMember = false
-    if (raceRow?.team_id) {
-      const { data: teamMemberRow } = await supabase
-        .from('team_members')
-        .select('id')
-        .eq('team_id', raceRow.team_id)
-        .eq('coach_id', session.user.id)
-        .maybeSingle()
-      isTeamMember = !!teamMemberRow
-    }
-
-    setIsParticipant(!!raceCoachRow || isTeamMember)
-  }
-
-  async function loadRaceAthletes() {
-    const { data } = await supabase
-      .from('athletes')
-      .select('*')
-      .eq('race_id', raceId)
-      .order('sort_order', { ascending: true })
-    if (data) setRaceAthletes(data)
-  }
-
-  async function loadCheckpoints() {
-    const { data } = await supabase
-      .from('checkpoints')
-      .select('*')
-      .eq('race_id', raceId)
-      .order('sort_order', { ascending: true })
-    if (data) setCheckpoints(data)
-  }
-
-  async function loadSplits() {
-    const { data } = await supabase
-      .from('splits')
-      .select('*')
-      .eq('race_id', raceId)
-      .order('recorded_time_ms', { ascending: true })
-    if (data) setSplits(data)
-  }
-
-  if (loading || !race) return <p className="text-center py-8 text-sm text-gray-500">Loading...</p>
-
-  return (
-    <div className="max-w-lg mx-auto px-4 py-8">
-      {session && (
-        <Link to="/" className="text-sm text-gray-500 underline">
-          &larr; All races
-        </Link>
-      )}
-      <h1 className="text-xl font-semibold mt-2 mb-1">{race.name}</h1>
-
-      {isOwner && race.status === 'setup' && (
-        <RaceSetup race={race} teamAthletes={teamAthletes} onStarted={loadAll} session={session} />
-      )}
-
-      {race.status !== 'setup' && !showReport && (
-        <RaceLive
-          race={race}
-          raceAthletes={raceAthletes}
-          checkpoints={checkpoints}
-          splits={splits}
-          isOwner={isOwner}
-          canRecord={canRecord}
-          session={session}
-          onViewReport={() => setShowReport(true)}
-        />
-      )}
-
-      {race.status !== 'setup' && showReport && (
-        <RaceReport
-          race={race}
-          raceAthletes={raceAthletes}
-          checkpoints={checkpoints}
-          splits={splits}
-          onBack={() => setShowReport(false)}
-        />
-      )}
-    </div>
-  )
-}
-
-function SortableRosterRow({ item, index, onRemove }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: item.key,
-  })
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-    zIndex: isDragging ? 10 : 'auto',
-    position: 'relative',
-  }
-
-  return (
-    <li ref={setNodeRef} style={style} className="flex items-center gap-2 px-3 py-2 text-sm bg-white">
-      <span className="text-gray-400 w-5">{index + 1}</span>
-      <button
-        {...attributes}
-        {...listeners}
-        className="text-gray-400 cursor-grab active:cursor-grabbing px-1 touch-none"
-        aria-label="Drag to reorder"
-      >
-        ⠿
-      </button>
-      <span className="flex-1">{item.name}</span>
-      <button onClick={() => onRemove(item.key)} className="text-gray-400 hover:text-red-600 px-1" aria-label="Remove">
-        ✕
-      </button>
-    </li>
-  )
-}
-
-function RaceSetup({ race, teamAthletes, onStarted, session }) {
-  const [roster, setRoster] = useState([]) // { key, team_athlete_id, name, bib }
-  const [oneOffName, setOneOffName] = useState('')
-  const [checkpointList, setCheckpointList] = useState([]) // { key, label }
-  const [customCheckpoint, setCustomCheckpoint] = useState('')
-  const [starting, setStarting] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const [predictedTimes, setPredictedTimes] = useState({}) // team_athlete_id -> { time, raceId }
-
-  useEffect(() => {
-    loadPredictedOrder()
-  }, [])
-
-  async function loadPredictedOrder() {
-    if (!session) return
-
-    const { data: races } = await supabase
-      .from('races')
-      .select('id, created_at')
-      .eq('coach_id', session.user.id)
-      .order('created_at', { ascending: false })
-    if (!races || races.length === 0) return
-
-    const raceIds = races.map((r) => r.id)
-    const raceRecency = {}
-    races.forEach((r, i) => {
-      raceRecency[r.id] = i // 0 = most recent
-    })
-
-    const [{ data: pastAthletes }, { data: pastCheckpoints }, { data: pastSplits }] = await Promise.all([
-      supabase.from('athletes').select('id, race_id, team_athlete_id').in('race_id', raceIds),
-      supabase.from('checkpoints').select('id, race_id, sort_order').in('race_id', raceIds),
-      supabase.from('splits').select('athlete_id, race_id, checkpoint_id, recorded_time_ms').in('race_id', raceIds),
-    ])
-    if (!pastAthletes || !pastCheckpoints || !pastSplits) return
-
-    // Find each past race's final checkpoint (highest sort_order)
-    const lastCheckpointByRace = {}
-    const lastSortOrderByRace = {}
-    pastCheckpoints.forEach((cp) => {
-      if (lastSortOrderByRace[cp.race_id] === undefined || cp.sort_order > lastSortOrderByRace[cp.race_id]) {
-        lastSortOrderByRace[cp.race_id] = cp.sort_order
-        lastCheckpointByRace[cp.race_id] = cp.id
-      }
-    })
-
-    // Map each race-specific athlete row back to the team roster athlete it came from
-    const athleteRowToTeamId = {}
-    pastAthletes.forEach((a) => {
-      athleteRowToTeamId[a.id] = a.team_athlete_id
-    })
-
-    const finishSplits = pastSplits.filter((s) => s.checkpoint_id === lastCheckpointByRace[s.race_id])
-
-    const predicted = {}
-    finishSplits.forEach((s) => {
-      const teamId = athleteRowToTeamId[s.athlete_id]
-      if (!teamId) return
-      const existing = predicted[teamId]
-      if (!existing || raceRecency[s.race_id] < raceRecency[existing.raceId]) {
-        predicted[teamId] = { time: s.recorded_time_ms, raceId: s.race_id }
-      }
-    })
-
-    setPredictedTimes(predicted)
-  }
-
-  // Insert a new roster entry into its predicted-order position based on past
-  // finish times, without disturbing any positions the coach has manually
-  // dragged already. Athletes with no race history go to the end.
-  function insertByPredictedOrder(list, item) {
-    const newTime = predictedTimes[item.team_athlete_id]?.time
-    if (newTime == null) return [...list, item]
-    let insertIndex = list.length
-    for (let i = 0; i < list.length; i++) {
-      const t = predictedTimes[list[i].team_athlete_id]?.time
-      if (t == null || t > newTime) {
-        insertIndex = i
-        break
-      }
-    }
-    const next = [...list]
-    next.splice(insertIndex, 0, item)
-    return next
-  }
-
-  function isSelected(teamAthleteId) {
-    return roster.some((r) => r.team_athlete_id === teamAthleteId)
-  }
-
-  const allTeamSelected = teamAthletes.length > 0 && teamAthletes.every((a) => isSelected(a.id))
-
-  function toggleSelectAll() {
-    if (allTeamSelected) {
-      setRoster(roster.filter((r) => r.team_athlete_id === null))
-    } else {
-      const missing = teamAthletes
-        .filter((a) => !isSelected(a.id))
-        .map((a) => ({ key: a.id, team_athlete_id: a.id, name: a.name, bib: a.bib }))
-        // Add fastest-known-first so they slot in relative to each other correctly
-        .sort((a, b) => {
-          const ta = predictedTimes[a.team_athlete_id]?.time
-          const tb = predictedTimes[b.team_athlete_id]?.time
-          if (ta == null && tb == null) return 0
-          if (ta == null) return 1
-          if (tb == null) return -1
-          return ta - tb
+    // Try a couple of times in the rare case of a join code collision
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { data, error } = await supabase
+        .from('races')
+        .insert({
+          name: name.trim(),
+          coach_id: session.user.id,
+          join_code: generateJoinCode(),
+          team_id: teamId,
         })
-      let next = roster
-      missing.forEach((item) => {
-        next = insertByPredictedOrder(next, item)
-      })
-      setRoster(next)
+        .select()
+        .single()
+
+      if (!error) {
+        setName('')
+        navigate(`/race/${data.id}`)
+        return
+      }
+      if (!String(error.message).toLowerCase().includes('join_code')) {
+        setError(error.message)
+        return
+      }
+      // otherwise loop and retry with a fresh code
     }
+    setError('Could not create race after a few attempts. Please try again.')
   }
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
-
-  function handleRosterDragEnd(event) {
-    const { active, over } = event
-    if (!over || active.id === over.id) return
-    setRoster((prev) => {
-      const oldIndex = prev.findIndex((r) => r.key === active.id)
-      const newIndex = prev.findIndex((r) => r.key === over.id)
-      return arrayMove(prev, oldIndex, newIndex)
-    })
-  }
-
-  function toggleTeamAthlete(a) {
-    if (isSelected(a.id)) {
-      setRoster(roster.filter((r) => r.team_athlete_id !== a.id))
-    } else {
-      setRoster(insertByPredictedOrder(roster, { key: a.id, team_athlete_id: a.id, name: a.name, bib: a.bib }))
+  async function deleteRace(race) {
+    const confirmed = window.confirm(
+      `Delete "${race.name}"? This permanently removes its roster and all recorded times.`
+    )
+    if (!confirmed) return
+    const { error } = await supabase.from('races').delete().eq('id', race.id)
+    if (error) {
+      setError(error.message)
+      return
     }
+    setRaces((prev) => prev.filter((r) => r.id !== race.id))
   }
 
-
-  function addOneOff(e) {
-    e.preventDefault()
-    if (!oneOffName.trim()) return
-    setRoster([
-      ...roster,
-      { key: `oneoff-${Date.now()}`, team_athlete_id: null, name: oneOffName.trim(), bib: null },
-    ])
-    setOneOffName('')
-  }
-
-  function move(index, dir) {
-    const next = [...roster]
-    const target = index + dir
-    if (target < 0 || target >= next.length) return
-    ;[next[index], next[target]] = [next[target], next[index]]
-    setRoster(next)
-  }
-
-  function remove(key) {
-    setRoster(roster.filter((r) => r.key !== key))
-  }
-
-  function addPresetCheckpoint(e) {
-    const label = e.target.value
-    if (!label) return
-    setCheckpointList([...checkpointList, { key: `cp-${Date.now()}`, label }])
-    e.target.value = ''
-  }
-
-  function addCustomCheckpoint(e) {
-    e.preventDefault()
-    if (!customCheckpoint.trim()) return
-    setCheckpointList([...checkpointList, { key: `cp-${Date.now()}`, label: customCheckpoint.trim() }])
-    setCustomCheckpoint('')
-  }
-
-  function moveCheckpoint(index, dir) {
-    const next = [...checkpointList]
-    const target = index + dir
-    if (target < 0 || target >= next.length) return
-    ;[next[index], next[target]] = [next[target], next[index]]
-    setCheckpointList(next)
-  }
-
-  function removeCheckpoint(key) {
-    setCheckpointList(checkpointList.filter((c) => c.key !== key))
-  }
-
-  async function copyCode() {
+  async function copyCode(race) {
     try {
       await navigator.clipboard.writeText(race.join_code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
+      setCopiedId(race.id)
+      setTimeout(() => setCopiedId(null), 1500)
     } catch {
-      // ignore
+      // Clipboard API can fail on some browsers/permissions - fail silently, code is shown anyway
     }
   }
 
-  async function startRace() {
-    if (roster.length === 0) return
-    setStarting(true)
-
-    const athleteRows = roster.map((r, i) => ({
-      race_id: race.id,
-      team_athlete_id: r.team_athlete_id,
-      name: r.name,
-      bib: r.bib,
-      sort_order: i,
-    }))
-
-    const checkpointRows =
-      checkpointList.length > 0
-        ? checkpointList.map((c, i) => ({ race_id: race.id, label: c.label, sort_order: i }))
-        : [{ race_id: race.id, label: 'Finish', sort_order: 0 }]
-
-    await supabase.from('athletes').insert(athleteRows)
-    await supabase.from('checkpoints').insert(checkpointRows)
-    await supabase.from('races').update({ status: 'live' }).eq('id', race.id)
-    setStarting(false)
-    onStarted()
+  async function signOut() {
+    await supabase.auth.signOut()
   }
 
   return (
-    <div>
-      <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 mb-6 flex items-center gap-2">
-        <span className="text-xs text-gray-500">Share this code so other coaches can join:</span>
-        <span className="text-sm font-mono font-semibold tracking-wider">{race.join_code}</span>
-        <button onClick={copyCode} className="text-xs text-gray-500 underline ml-auto">
-          {copied ? 'Copied!' : 'Copy'}
-        </button>
-      </div>
-
-      <p className="text-sm text-gray-500 mb-4">
-        Pick who's running this race, then arrange your expected finish order.
-      </p>
-
-      {teamAthletes.length > 0 && (
-        <div className="mb-4">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-medium text-gray-700">Team roster</h2>
-            <button onClick={toggleSelectAll} className="text-xs text-gray-500 underline">
-              {allTeamSelected ? 'Deselect all' : 'Select all'}
-            </button>
-          </div>
-          <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-56 overflow-y-auto">
-            {teamAthletes.map((a) => (
-              <label key={a.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer">
-                <input type="checkbox" checked={isSelected(a.id)} onChange={() => toggleTeamAthlete(a)} />
-                <span>
-                  {a.name}
-                  {a.bib && <span className="text-gray-400 ml-2">#{a.bib}</span>}
-                </span>
-              </label>
-            ))}
-          </div>
+    <div className="max-w-2xl mx-auto px-4 py-8">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-xl font-semibold">Your races</h1>
+        <div className="flex items-center gap-4">
+          <Link to="/team" className="text-sm text-gray-500 underline">
+            Team
+          </Link>
+          <Link to="/join" className="text-sm text-gray-500 underline">
+            Join a race
+          </Link>
+          <Link to="/roster" className="text-sm text-gray-500 underline">
+            Team roster
+          </Link>
+          <button onClick={signOut} className="text-sm text-gray-500 underline">
+            Sign out
+          </button>
         </div>
-      )}
-
-      <form onSubmit={addOneOff} className="flex gap-2 mb-6">
-        <input
-          type="text"
-          placeholder="Add a runner not on your roster"
-          value={oneOffName}
-          onChange={(e) => setOneOffName(e.target.value)}
-          className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
-        />
-        <button className="border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium">Add</button>
-      </form>
-
-      <h2 className="text-sm font-medium text-gray-700 mb-2">Expected finish order ({roster.length})</h2>
-      {roster.length === 0 ? (
-        <p className="text-sm text-gray-400 mb-6">Select athletes above to build the order.</p>
-      ) : (
-        <p className="text-xs text-gray-400 mb-2">
-          {Object.keys(predictedTimes).length > 0
-            ? 'Auto-sorted by each runner\'s most recent finish time — drag the ⠿ handle to adjust'
-            : 'Drag the ⠿ handle to reorder'}
-        </p>
-      )}
-      {roster.length > 0 && (
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRosterDragEnd}>
-          <SortableContext items={roster.map((r) => r.key)} strategy={verticalListSortingStrategy}>
-            <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6 overflow-hidden">
-              {roster.map((r, i) => (
-                <SortableRosterRow key={r.key} item={r} index={i} onRemove={remove} />
-              ))}
-            </ul>
-          </SortableContext>
-        </DndContext>
-      )}
-
-      <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>
-      <p className="text-xs text-gray-500 mb-2">
-        Optional. Add a checkpoint for every spot on the course a coach will be timing from, in
-        order. Leave empty for a simple single finish-line race.
-      </p>
-      <div className="flex gap-2 mb-3">
-        <select
-          onChange={addPresetCheckpoint}
-          defaultValue=""
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-        >
-          <option value="" disabled>
-            Add a common checkpoint...
-          </option>
-          {CHECKPOINT_PRESETS.map((p) => (
-            <option key={p} value={p}>
-              {p}
-            </option>
-          ))}
-        </select>
       </div>
-      <form onSubmit={addCustomCheckpoint} className="flex gap-2 mb-3">
+
+      <form onSubmit={createRace} className="flex gap-2 mb-2">
         <input
           type="text"
-          placeholder="Or type a custom checkpoint name"
-          value={customCheckpoint}
-          onChange={(e) => setCustomCheckpoint(e.target.value)}
+          placeholder="New race name (e.g. Duncan Invitational - Varsity Boys)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
           className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
         />
-        <button className="border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium">Add</button>
+        <button className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium">
+          Create
+        </button>
       </form>
+      {error && <p className="text-sm text-red-600 mb-6">{error}</p>}
 
-      {checkpointList.length > 0 && (
-        <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6">
-          {checkpointList.map((c, i) => (
-            <li key={c.key} className="flex items-center gap-2 px-3 py-2 text-sm">
-              <span className="text-gray-400 w-5">{i + 1}</span>
-              <span className="flex-1">{c.label}</span>
-              <button
-                onClick={() => moveCheckpoint(i, -1)}
-                disabled={i === 0}
-                className="text-gray-400 disabled:opacity-30 px-1"
-                aria-label="Move up"
-              >
-                ↑
-              </button>
-              <button
-                onClick={() => moveCheckpoint(i, 1)}
-                disabled={i === checkpointList.length - 1}
-                className="text-gray-400 disabled:opacity-30 px-1"
-                aria-label="Move down"
-              >
-                ↓
-              </button>
-              <button
-                onClick={() => removeCheckpoint(c.key)}
-                className="text-gray-400 hover:text-red-600 px-1"
-                aria-label="Remove"
-              >
-                ✕
-              </button>
+      {loading ? (
+        <p className="text-sm text-gray-500">Loading...</p>
+      ) : races.length === 0 ? (
+        <p className="text-sm text-gray-500">No races yet. Create one above.</p>
+      ) : (
+        <ul className="space-y-2">
+          {races.map((r) => (
+            <li key={r.id} className="border border-gray-200 rounded-lg px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Link to={`/race/${r.id}`} className="flex-1 block hover:opacity-70">
+                  <div className="font-medium text-sm flex items-center gap-2">
+                    {r.name}
+                    {r.team_id && (
+                      <span className="text-[10px] uppercase tracking-wide text-gray-400 border border-gray-200 rounded-full px-1.5 py-0.5">
+                        Team
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {new Date(r.created_at).toLocaleDateString()} · {r.status}
+                  </div>
+                </Link>
+                {r.coach_id === session.user.id && (
+                  <button
+                    onClick={() => deleteRace(r)}
+                    className="text-gray-400 hover:text-red-600 text-sm px-2"
+                    aria-label={`Delete ${r.name}`}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+              {r.coach_id === session.user.id && (
+                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
+                  <span className="text-xs text-gray-400">Join code:</span>
+                  <span className="text-xs font-mono font-semibold tracking-wider">{r.join_code}</span>
+                  <button
+                    onClick={() => copyCode(r)}
+                    className="text-xs text-gray-500 underline ml-1"
+                  >
+                    {copiedId === r.id ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+              )}
             </li>
           ))}
         </ul>
       )}
-
-      <button
-        onClick={startRace}
-        disabled={roster.length === 0 || starting}
-        className="w-full bg-gray-900 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-40"
-      >
-        {starting ? 'Starting...' : 'Start race'}
-      </button>
-    </div>
-  )
-}
-
-function computeElapsed(raceLike) {
-  if (!raceLike) return 0
-  const base = raceLike.accumulated_ms || 0
-  if (raceLike.running && raceLike.started_at) {
-    return base + (Date.now() - new Date(raceLike.started_at).getTime())
-  }
-  return base
-}
-
-function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord, session, onViewReport }) {
-  const sortedCheckpoints = [...checkpoints].sort((a, b) => a.sort_order - b.sort_order)
-  const [activeCheckpointId, setActiveCheckpointId] = useState(null)
-  const rafRef = useRef(null)
-
-  const [localRace, setLocalRace] = useState(race)
-  const [elapsed, setElapsed] = useState(computeElapsed(race))
-
-  useEffect(() => {
-    setLocalRace(race)
-  }, [race.running, race.started_at, race.accumulated_ms])
-
-  useEffect(() => {
-    cancelAnimationFrame(rafRef.current)
-    setElapsed(computeElapsed(localRace))
-    if (localRace.running) {
-      function loop() {
-        setElapsed(computeElapsed(localRace))
-        rafRef.current = requestAnimationFrame(loop)
-      }
-      rafRef.current = requestAnimationFrame(loop)
-    }
-    return () => cancelAnimationFrame(rafRef.current)
-  }, [localRace.running, localRace.started_at, localRace.accumulated_ms])
-
-  useEffect(() => {
-    if (!activeCheckpointId && sortedCheckpoints.length > 0) {
-      setActiveCheckpointId(sortedCheckpoints[sortedCheckpoints.length - 1].id)
-    }
-  }, [checkpoints.length])
-
-  const [pendingSplits, setPendingSplits] = useState([])
-  const [removedIds, setRemovedIds] = useState(new Set())
-  const inFlightRef = useRef({})
-
-  async function handleStartStop() {
-    if (!localRace.running) {
-      const started_at = new Date().toISOString()
-      setLocalRace((prev) => ({ ...prev, running: true, started_at }))
-      await supabase.from('races').update({ running: true, started_at }).eq('id', race.id)
-    } else {
-      const elapsedNow = computeElapsed(localRace)
-      setLocalRace((prev) => ({ ...prev, running: false, started_at: null, accumulated_ms: elapsedNow }))
-      await supabase
-        .from('races')
-        .update({ running: false, started_at: null, accumulated_ms: elapsedNow })
-        .eq('id', race.id)
-    }
-  }
-
-  async function resetRace() {
-    const confirmed = window.confirm(
-      'Reset this race? This clears the clock and permanently deletes every recorded time at every checkpoint. This cannot be undone.'
-    )
-    if (!confirmed) return
-
-    setLocalRace((prev) => ({ ...prev, running: false, started_at: null, accumulated_ms: 0 }))
-    setPendingSplits([])
-    setRemovedIds(new Set())
-    inFlightRef.current = {}
-
-    await supabase.from('races').update({ running: false, started_at: null, accumulated_ms: 0 }).eq('id', race.id)
-    await supabase.from('splits').delete().eq('race_id', race.id)
-  }
-
-  const activeCheckpoint = sortedCheckpoints.find((c) => c.id === activeCheckpointId)
-  const activeIndex = sortedCheckpoints.findIndex((c) => c.id === activeCheckpointId)
-  const prevCheckpoint = activeIndex > 0 ? sortedCheckpoints[activeIndex - 1] : null
-
-  const splitsForActive = splits.filter((s) => s.checkpoint_id === activeCheckpointId)
-  const confirmedAthleteIdsActive = new Set(splitsForActive.map((s) => s.athlete_id))
-  const visibleConfirmed = splitsForActive.filter((s) => !removedIds.has(s.id))
-  const visiblePending = pendingSplits.filter(
-    (p) => p.checkpoint_id === activeCheckpointId && !confirmedAthleteIdsActive.has(p.athlete_id)
-  )
-  const finishedInOrder = [...visibleConfirmed, ...visiblePending].sort(
-    (a, b) => a.recorded_time_ms - b.recorded_time_ms
-  )
-  const finishedAthleteIds = new Set(finishedInOrder.map((s) => s.athlete_id))
-
-  let waiting = raceAthletes.filter((a) => !finishedAthleteIds.has(a.id))
-  if (prevCheckpoint) {
-    const prevTimes = {}
-    splits
-      .filter((s) => s.checkpoint_id === prevCheckpoint.id)
-      .forEach((s) => {
-        prevTimes[s.athlete_id] = s.recorded_time_ms
-      })
-    waiting = [...waiting].sort((a, b) => {
-      const aHas = prevTimes[a.id] != null
-      const bHas = prevTimes[b.id] != null
-      if (aHas && bHas) return prevTimes[a.id] - prevTimes[b.id]
-      if (aHas) return -1
-      if (bHas) return 1
-      return a.sort_order - b.sort_order
-    })
-  }
-
-  async function recordFinish(athlete) {
-    if (!localRace.running || !activeCheckpoint) return
-    const time = computeElapsed(localRace)
-    const tempId = `pending-${athlete.id}-${Date.now()}`
-    inFlightRef.current[tempId] = { cancelled: false, realId: null }
-    setPendingSplits((prev) => [
-      ...prev,
-      {
-        id: tempId,
-        athlete_id: athlete.id,
-        checkpoint_id: activeCheckpoint.id,
-        label: athlete.name,
-        recorded_time_ms: time,
-      },
-    ])
-
-    const { data, error } = await supabase
-      .from('splits')
-      .insert({
-        race_id: race.id,
-        athlete_id: athlete.id,
-        checkpoint_id: activeCheckpoint.id,
-        label: athlete.name,
-        recorded_time_ms: time,
-      })
-      .select()
-      .single()
-
-    const flight = inFlightRef.current[tempId]
-
-    if (error) {
-      setPendingSplits((prev) => prev.filter((p) => p.id !== tempId))
-      delete inFlightRef.current[tempId]
-      return
-    }
-
-    if (flight?.cancelled) {
-      await supabase.from('splits').delete().eq('id', data.id)
-      setPendingSplits((prev) => prev.filter((p) => p.id !== tempId))
-      delete inFlightRef.current[tempId]
-      return
-    }
-
-    if (flight) flight.realId = data.id
-  }
-
-  async function undoLast() {
-    if (finishedInOrder.length === 0) return
-    const last = finishedInOrder[finishedInOrder.length - 1]
-
-    if (String(last.id).startsWith('pending-')) {
-      const flight = inFlightRef.current[last.id]
-      setPendingSplits((prev) => prev.filter((p) => p.id !== last.id))
-      if (flight?.realId) {
-        await supabase.from('splits').delete().eq('id', flight.realId)
-        delete inFlightRef.current[last.id]
-      } else if (flight) {
-        flight.cancelled = true
-      }
-    } else {
-      setRemovedIds((prev) => new Set(prev).add(last.id))
-      const { error } = await supabase.from('splits').delete().eq('id', last.id)
-      if (error) {
-        setRemovedIds((prev) => {
-          const next = new Set(prev)
-          next.delete(last.id)
-          return next
-        })
-      }
-    }
-  }
-
-  function checkpointCount(cp) {
-    return splits.filter((s) => s.checkpoint_id === cp.id).length
-  }
-
-  const [linkCopied, setLinkCopied] = useState(false)
-  const [showQr, setShowQr] = useState(false)
-  const resultsUrl = typeof window !== 'undefined' ? window.location.href : ''
-  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(resultsUrl)}`
-
-  async function copyResultsLink() {
-    try {
-      await navigator.clipboard.writeText(resultsUrl)
-      setLinkCopied(true)
-      setTimeout(() => setLinkCopied(false), 1500)
-    } catch {
-      // ignore
-    }
-  }
-
-  return (
-    <div>
-      {isOwner && (
-        <div className="space-y-2 mb-4">
-          <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2">
-            <span className="text-xs text-gray-500">Coach join code:</span>
-            <span className="text-sm font-mono font-semibold tracking-wider">{race.join_code}</span>
-          </div>
-          <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2">
-            <span className="text-xs text-gray-500">Results link for parents &amp; fans:</span>
-            <button onClick={copyResultsLink} className="text-xs text-gray-700 underline ml-auto">
-              {linkCopied ? 'Copied!' : 'Copy link'}
-            </button>
-            <button onClick={() => setShowQr((v) => !v)} className="text-xs text-gray-700 underline">
-              {showQr ? 'Hide QR' : 'QR code'}
-            </button>
-          </div>
-          {showQr && (
-            <div className="flex justify-center py-2">
-              <img src={qrSrc} alt="QR code linking to live race results" width={180} height={180} />
-            </div>
-          )}
-          <p className="text-xs text-gray-400 px-1">
-            Anyone with this link or QR code can view live results — no account needed, and they can't record times.
-          </p>
-        </div>
-      )}
-
-      <div className="text-center py-4">
-        <div className="text-5xl font-semibold tabular-nums">{formatTime(elapsed)}</div>
-      </div>
-
-      {isOwner && (
-        <div className="flex gap-2 justify-center mb-4">
-          <button onClick={handleStartStop} className="min-w-[100px] border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium">
-            {localRace.running ? 'Stop' : elapsed > 0 ? 'Resume' : 'Start'}
-          </button>
-          <button
-            onClick={resetRace}
-            className="border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm font-medium"
-          >
-            Reset race
-          </button>
-        </div>
-      )}
-
-      {sortedCheckpoints.length > 1 && (
-        <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
-          {sortedCheckpoints.map((cp) => (
-            <button
-              key={cp.id}
-              onClick={() => setActiveCheckpointId(cp.id)}
-              className={`whitespace-nowrap text-xs px-3 py-1.5 rounded-full border ${
-                cp.id === activeCheckpointId
-                  ? 'bg-gray-900 text-white border-gray-900 font-medium'
-                  : 'border-gray-300 text-gray-500'
-              }`}
-            >
-              {cp.label} ({checkpointCount(cp)}/{raceAthletes.length})
-            </button>
-          ))}
-        </div>
-      )}
-
-      {canRecord && (
-        <>
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-medium text-gray-700">
-              Recording at: {activeCheckpoint?.label || '—'}
-            </h2>
-            <button
-              onClick={undoLast}
-              disabled={finishedInOrder.length === 0}
-              className="text-xs text-gray-500 underline disabled:opacity-40"
-            >
-              Undo
-            </button>
-          </div>
-          <p className="text-xs text-gray-400 mb-2">Tap a name below as each runner reaches this point</p>
-
-          <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6">
-            {waiting.length === 0 ? (
-              <li className="px-3 py-3 text-sm text-gray-400">Everyone has come through.</li>
-            ) : (
-              waiting.map((a) => (
-                <li key={a.id}>
-                  <button
-                    onClick={() => recordFinish(a)}
-                    disabled={!localRace.running}
-                    className="w-full text-left px-3 py-3 text-sm hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
-                  >
-                    {a.name}
-                    {a.bib && <span className="text-gray-400 ml-2">#{a.bib}</span>}
-                  </button>
-                </li>
-              ))
-            )}
-          </ul>
-        </>
-      )}
-
-      {!canRecord && session && (
-        <p className="text-xs text-gray-400 mb-4">
-          Helping time this race?{' '}
-          <Link to="/join" className="underline">
-            Enter the join code
-          </Link>{' '}
-          to record times.
-        </p>
-      )}
-
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-sm font-medium text-gray-700">
-          {activeCheckpoint?.label || 'Results'} ({finishedInOrder.length})
-        </h2>
-        {finishedInOrder.length > 0 && (
-          <button onClick={() => downloadCSV(`${race.name} - ${activeCheckpoint?.label}`, finishedInOrder)} className="text-xs text-gray-500 underline">
-            Export CSV
-          </button>
-        )}
-      </div>
-
-      {finishedInOrder.length === 0 ? (
-        <p className="text-sm text-gray-400 mb-6">No times recorded yet at this checkpoint.</p>
-      ) : (
-        <table className="w-full text-sm mb-6">
-          <tbody>
-            {finishedInOrder.map((s, i) => (
-              <tr key={s.id} className="border-b border-gray-100">
-                <td className="py-2 text-gray-400 w-8">{i + 1}</td>
-                <td className="py-2">{s.label}</td>
-                <td className="py-2 text-right tabular-nums font-medium">{formatTime(s.recorded_time_ms)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      <button onClick={onViewReport} className="w-full border border-gray-300 rounded-lg py-2 text-sm font-medium">
-        View full report (splits + finish times)
-      </button>
-
-      {!session && (
-        <p className="text-xs text-gray-400 mt-6">Live results — this page updates automatically as finishers are recorded.</p>
-      )}
-    </div>
-  )
-}
-
-function RaceReport({ race, raceAthletes, checkpoints, splits, onBack }) {
-  const { sortedCheckpoints, rows } = buildReportRows(checkpoints, raceAthletes, splits)
-
-  return (
-    <div>
-      <button onClick={onBack} className="text-sm text-gray-500 underline mb-4">
-        &larr; Back to race
-      </button>
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">Full report</h2>
-        <button
-          onClick={() => downloadReportCSV(race.name, checkpoints, raceAthletes, splits)}
-          className="text-xs text-gray-500 underline"
-        >
-          Download CSV
-        </button>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="text-sm border-collapse">
-          <thead>
-            <tr>
-              <th className="text-left py-2 pr-4 sticky left-0 bg-white">Runner</th>
-              {sortedCheckpoints.map((cp) => (
-                <th key={cp.id} colSpan={2} className="text-center py-2 px-2 border-l border-gray-100">
-                  {cp.label}
-                </th>
-              ))}
-            </tr>
-            <tr>
-              <th className="sticky left-0 bg-white"></th>
-              {sortedCheckpoints.map((cp) => (
-                <>
-                  <th key={`${cp.id}-time`} className="text-xs font-normal text-gray-400 px-2 border-l border-gray-100">
-                    Time
-                  </th>
-                  <th key={`${cp.id}-split`} className="text-xs font-normal text-gray-400 px-2">
-                    Split
-                  </th>
-                </>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(({ athlete, checkpointCells }) => (
-              <tr key={athlete.id} className="border-t border-gray-100">
-                <td className="py-2 pr-4 font-medium sticky left-0 bg-white">{athlete.name}</td>
-                {checkpointCells.map((c) => (
-                  <>
-                    <td key={`${c.checkpointId}-time`} className="text-right tabular-nums px-2 border-l border-gray-100">
-                      {formatTime(c.cumulative)}
-                    </td>
-                    <td key={`${c.checkpointId}-split`} className="text-right tabular-nums px-2 text-gray-500">
-                      {formatTime(c.segment)}
-                    </td>
-                  </>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   )
 }
