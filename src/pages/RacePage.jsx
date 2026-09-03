@@ -75,15 +75,31 @@ export default function RacePage({ session }) {
     }
   }
 
-  async function loadParticipation() {
+   async function loadParticipation() {
     if (!session) return
-    const { data } = await supabase
+
+    const { data: raceRow } = await supabase.from('races').select('team_id').eq('id', raceId).maybeSingle()
+
+    const { data: raceCoachRow } = await supabase
       .from('race_coaches')
       .select('id')
       .eq('race_id', raceId)
       .eq('coach_id', session.user.id)
       .maybeSingle()
-    setIsParticipant(!!data)
+
+    let isTeamMember = false
+    if (raceRow?.team_id) {
+      const { data: teamMemberRow } = await supabase
+        .from('team_members')
+        .select('id')
+        .eq('team_id', raceRow.team_id)
+        .eq('coach_id', session.user.id)
+        .maybeSingle()
+      isTeamMember = !!teamMemberRow
+    }
+
+    setIsParticipant(!!raceCoachRow || isTeamMember)
+  }
   }
 
   async function loadRaceAthletes() {
