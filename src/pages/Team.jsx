@@ -25,6 +25,12 @@ export default function Team({ session }) {
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(false)
 
+  const [editing, setEditing] = useState(false)
+  const [editName, setEditName] = useState('')
+  const [photoFile, setPhotoFile] = useState(null)
+  const [photoPreview, setPhotoPreview] = useState(null)
+  const [saving, setSaving] = useState(false)
+
   const activeTeam = teams.find((t) => t.id === activeTeamId) || null
 
   useEffect(() => {
@@ -183,6 +189,74 @@ export default function Team({ session }) {
     loadTeams()
   }
 
+  function startEdit() {
+    setEditName(activeTeam.name)
+    setPhotoFile(null)
+    setPhotoPreview(activeTeam.photo_url || null)
+    setEditing(true)
+  }
+
+  function handlePhotoChange(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setPhotoFile(file)
+    setPhotoPreview(URL.createObjectURL(file))
+  }
+
+  async function saveEdit(e) {
+    e.preventDefault()
+    if (!editName.trim()) return
+    setSaving(true)
+    setError('')
+
+    let photoUrl = activeTeam.photo_url
+
+    if (photoFile) {
+      const ext = photoFile.name.split('.').pop()
+      const path = `${activeTeam.id}/${Date.now()}.${ext}`
+      const { error: uploadError } = await supabase.storage
+        .from('team-photos')
+        .upload(path, photoFile, { upsert: true })
+
+      if (uploadError) {
+        setSaving(false)
+        setError(`Photo upload failed: ${uploadError.message}`)
+        return
+      }
+      photoUrl = supabase.storage.from('team-photos').getPublicUrl(path).data.publicUrl
+    }
+
+    const { error: updateError } = await supabase
+      .from('teams')
+      .update({ name: editName.trim(), photo_url: photoUrl })
+      .eq('id', activeTeam.id)
+
+    setSaving(false)
+
+    if (updateError) {
+      setError(updateError.message)
+      return
+    }
+
+    setEditing(false)
+    setPhotoFile(null)
+    loadTeams()
+  }
+
+  async function removePhoto() {
+    const { error: updateError } = await supabase
+      .from('teams')
+      .update({ photo_url: null })
+      .eq('id', activeTeam.id)
+    if (updateError) {
+      setError(updateError.message)
+      return
+    }
+    setPhotoPreview(null)
+    setPhotoFile(null)
+    loadTeams()
+  }
+
   if (loading) return <p className="text-center py-8 text-sm text-gray-500">Loading...</p>
 
   return (
@@ -274,9 +348,62 @@ export default function Team({ session }) {
         <p className="text-sm text-gray-400">
           You're not on a team yet. Create one or join one with a team code above.
         </p>
+      ) : editing ? (
+        <form onSubmit={saveEdit} className="space-y-3 mb-6">
+          <h2 className="text-sm font-medium text-gray-700">Edit team</h2>
+
+          {photoPreview && (
+            <img src={photoPreview} alt="" className="w-24 h-24 rounded-lg object-cover border border-gray-200" />
+          )}
+          <div className="flex items-center gap-3">
+            <input type="file" accept="image/*" onChange={handlePhotoChange} className="text-sm" />
+            {activeTeam.photo_url && (
+              <button type="button" onClick={removePhoto} className="text-xs text-red-600 underline">
+                Remove photo
+              </button>
+            )}
+          </div>
+
+          <input
+            type="text"
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          />
+
+          <div className="flex gap-2">
+            <button
+              disabled={saving}
+              className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              className="border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
       ) : (
         <>
-          <h2 className="text-lg font-semibold mb-1">{activeTeam.name}</h2>
+          <div className="flex items-center gap-3 mb-1">
+            {activeTeam.photo_url && (
+              <img
+                src={activeTeam.photo_url}
+                alt=""
+                className="w-14 h-14 rounded-lg object-cover border border-gray-200"
+              />
+            )}
+            <h2 className="text-lg font-semibold flex-1">{activeTeam.name}</h2>
+            {activeTeam.isOwner && (
+              <button onClick={startEdit} className="text-xs text-gray-500 underline">
+                Edit
+              </button>
+            )}
+          </div>
           <p className="text-sm text-gray-500 mb-4">
             {activeTeam.memberCount} coach{activeTeam.memberCount === 1 ? '' : 'es'} on this team
           </p>
