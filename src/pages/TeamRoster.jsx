@@ -9,6 +9,10 @@ const GENDERS = [
 ]
 
 export default function TeamRoster({ session }) {
+  const [teams, setTeams] = useState([])
+  const [activeTeamId, setActiveTeamId] = useState('none') // 'none' = personal, no team
+  const [viewMode, setViewMode] = useState('mine') // 'mine' | 'team'
+
   const [athletes, setAthletes] = useState([])
   const [name, setName] = useState('')
   const [bib, setBib] = useState('')
@@ -22,15 +26,45 @@ export default function TeamRoster({ session }) {
   const [gradeFilter, setGradeFilter] = useState('all')
 
   useEffect(() => {
-    loadRoster()
+    loadTeams()
   }, [])
+
+  useEffect(() => {
+    loadRoster()
+  }, [activeTeamId, viewMode])
+
+  async function loadTeams() {
+    const { data: memberships } = await supabase
+      .from('team_members')
+      .select('team_id')
+      .eq('coach_id', session.user.id)
+    if (!memberships || memberships.length === 0) return
+
+    const { data: teamRows } = await supabase
+      .from('teams')
+      .select('id, name')
+      .in('id', memberships.map((m) => m.team_id))
+      .order('name', { ascending: true })
+
+    setTeams(teamRows || [])
+    if (teamRows && teamRows.length > 0) setActiveTeamId(teamRows[0].id)
+  }
 
   async function loadRoster() {
     setLoading(true)
-    const { data } = await supabase
-      .from('team_athletes')
-      .select('*')
-      .order('name', { ascending: true })
+
+    let query = supabase.from('team_athletes').select('*').order('name', { ascending: true })
+
+    if (viewMode === 'mine') {
+      query = query.eq('coach_id', session.user.id)
+    }
+    if (activeTeamId === 'none') {
+      query = query.is('team_id', null)
+    } else {
+      query = query.eq('team_id', activeTeamId)
+    }
+
+    const { data } = await query
     if (data) setAthletes(data)
     setLoading(false)
   }
@@ -41,6 +75,7 @@ export default function TeamRoster({ session }) {
     setError('')
     const { error } = await supabase.from('team_athletes').insert({
       coach_id: session.user.id,
+      team_id: activeTeamId === 'none' ? null : activeTeamId,
       name: name.trim(),
       bib: bib.trim() || null,
       grade: grade || null,
@@ -88,6 +123,7 @@ export default function TeamRoster({ session }) {
 
       return {
         coach_id: session.user.id,
+        team_id: activeTeamId === 'none' ? null : activeTeamId,
         name: n,
         bib: b || null,
         grade: g || null,
@@ -111,11 +147,16 @@ export default function TeamRoster({ session }) {
 
   async function deleteAll() {
     if (athletes.length === 0) return
+    const label = activeTeamId === 'none' ? 'your personal (no team) roster' : "this team's roster"
     const confirmed = window.confirm(
-      `Delete all ${athletes.length} athletes from your team roster? This cannot be undone. Past races you've already run are not affected.`
+      `Delete all ${athletes.length} athletes from ${label}? This cannot be undone. Past races you've already run are not affected.`
     )
     if (!confirmed) return
-    const { error } = await supabase.from('team_athletes').delete().eq('coach_id', session.user.id)
+
+    let query = supabase.from('team_athletes').delete().eq('coach_id', session.user.id)
+    query = activeTeamId === 'none' ? query.is('team_id', null) : query.eq('team_id', activeTeamId)
+
+    const { error } = await query
     if (error) {
       setError(error.message)
       return
@@ -152,89 +193,134 @@ export default function TeamRoster({ session }) {
     return Number(a) - Number(b)
   }
 
+  const canEdit = viewMode === 'mine'
+
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
       <Link to="/" className="text-sm text-gray-500 underline">
         &larr; All races
       </Link>
-      <div className="flex items-center justify-between mt-2 mb-1">
-        <h1 className="text-xl font-semibold">Team roster</h1>
-        {athletes.length > 0 && (
-          <button onClick={deleteAll} className="text-xs text-red-600 underline">
+      <h1 className="text-xl font-semibold mt-2 mb-1">Roster</h1>
+      <p className="text-sm text-gray-500 mb-4">
+        Build this once, then pick from it when setting up each race.
+      </p>
+
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <select
+          value={activeTeamId}
+          onChange={(e) => setActiveTeamId(e.target.value)}
+          className="text-sm border border-gray-300 rounded-lg px-3 py-1.5"
+        >
+          <option value="none">No team (personal)</option>
+          {teams.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+
+        {activeTeamId !== 'none' && (
+          <div className="flex text-sm border border-gray-300 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setViewMode('mine')}
+              className={`px-3 py-1.5 ${viewMode === 'mine' ? 'bg-gray-900 text-white' : 'text-gray-600'}`}
+            >
+              My roster
+            </button>
+            <button
+              onClick={() => setViewMode('team')}
+              className={`px-3 py-1.5 border-l border-gray-300 ${
+                viewMode === 'team' ? 'bg-gray-900 text-white' : 'text-gray-600'
+              }`}
+            >
+              Whole team
+            </button>
+          </div>
+        )}
+
+        {canEdit && athletes.length > 0 && (
+          <button onClick={deleteAll} className="text-xs text-red-600 underline ml-auto">
             Delete all
           </button>
         )}
       </div>
-      <p className="text-sm text-gray-500 mb-6">
-        Build this once, then pick from it when setting up each race.
-      </p>
 
-      <form onSubmit={addOne} className="flex flex-wrap gap-2 mb-3">
-        <input
-          type="text"
-          placeholder="Athlete name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="flex-1 min-w-[140px] border border-gray-300 rounded-lg px-3 py-2 text-sm"
-        />
-        <input
-          type="text"
-          placeholder="Bib (optional)"
-          value={bib}
-          onChange={(e) => setBib(e.target.value)}
-          className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm"
-        />
-        <select
-          value={grade}
-          onChange={(e) => setGrade(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-        >
-          <option value="">Grade</option>
-          {GRADES.map((g) => (
-            <option key={g} value={g}>
-              {g}
-            </option>
-          ))}
-        </select>
-        <select
-          value={gender}
-          onChange={(e) => setGender(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-        >
-          <option value="">Gender</option>
-          {GENDERS.map((g) => (
-            <option key={g.value} value={g.value}>
-              {g.label}
-            </option>
-          ))}
-        </select>
-        <button className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium">
-          Add
-        </button>
-      </form>
+      {canEdit && (
+        <>
+          <form onSubmit={addOne} className="flex flex-wrap gap-2 mb-3">
+            <input
+              type="text"
+              placeholder="Athlete name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="flex-1 min-w-[140px] border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            />
+            <input
+              type="text"
+              placeholder="Bib (optional)"
+              value={bib}
+              onChange={(e) => setBib(e.target.value)}
+              className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            />
+            <select
+              value={grade}
+              onChange={(e) => setGrade(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="">Grade</option>
+              {GRADES.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+            <select
+              value={gender}
+              onChange={(e) => setGender(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="">Gender</option>
+              {GENDERS.map((g) => (
+                <option key={g.value} value={g.value}>
+                  {g.label}
+                </option>
+              ))}
+            </select>
+            <button className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium">
+              Add
+            </button>
+          </form>
 
-      <details className="mb-6">
-        <summary className="text-sm text-gray-500 cursor-pointer">
-          Or paste a whole list at once
-        </summary>
-        <form onSubmit={addBulk} className="mt-2 space-y-2">
-          <textarea
-            placeholder={
-              'One per line. Works with tabs (pasted from a spreadsheet) or commas.\n' +
-              'Accepted formats:\n' +
-              'Name, Grade, Gender  ->  Asher Covington, 6, M\n' +
-              'Name, Bib, Grade, Gender  ->  Asher Covington, 101, 6, M'
-            }
-            value={bulkText}
-            onChange={(e) => setBulkText(e.target.value)}
-            rows={6}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-          />
-          <button className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium">
-            Add list
-          </button>
-        </form>
-      </details>
+          <details className="mb-6">
+            <summary className="text-sm text-gray-500 cursor-pointer">
+              Or paste a whole list at once
+            </summary>
+            <form onSubmit={addBulk} className="mt-2 space-y-2">
+              <textarea
+                placeholder={
+                  'One per line. Works with tabs (pasted from a spreadsheet) or commas.\n' +
+                  'Accepted formats:\n' +
+                  'Name, Grade, Gender  ->  Asher Covington, 6, M\n' +
+                  'Name, Bib, Grade, Gender  ->  Asher Covington, 101, 6, M'
+                }
+                value={bulkText}
+                onChange={(e) => setBulkText(e.target.value)}
+                rows={6}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+              />
+              <button className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium">
+                Add list
+              </button>
+            </form>
+          </details>
+        </>
+      )}
+
+      {!canEdit && (
+        <p className="text-xs text-gray-400 mb-4">
+          Read-only view of everyone's athletes on this team. Switch to "My roster" to add or remove your own.
+        </p>
+      )}
 
       {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
 
@@ -304,12 +390,14 @@ export default function TeamRoster({ session }) {
                             {a.name}
                             {a.bib && <span className="text-gray-400 ml-2">#{a.bib}</span>}
                           </span>
-                          <button
-                            onClick={() => removeAthlete(a.id)}
-                            className="text-gray-400 hover:text-red-600 text-xs"
-                          >
-                            Remove
-                          </button>
+                          {canEdit && (
+                            <button
+                              onClick={() => removeAthlete(a.id)}
+                              className="text-gray-400 hover:text-red-600 text-xs"
+                            >
+                              Remove
+                            </button>
+                          )}
                         </li>
                       ))}
                     </ul>
