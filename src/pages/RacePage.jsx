@@ -75,7 +75,7 @@ export default function RacePage({ session }) {
     }
   }
 
-   async function loadParticipation() {
+  async function loadParticipation() {
     if (!session) return
 
     const { data: raceRow } = await supabase.from('races').select('team_id').eq('id', raceId).maybeSingle()
@@ -99,7 +99,6 @@ export default function RacePage({ session }) {
     }
 
     setIsParticipant(!!raceCoachRow || isTeamMember)
-  }
   }
 
   async function loadRaceAthletes() {
@@ -337,6 +336,7 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
     }
   }
 
+
   function addOneOff(e) {
     e.preventDefault()
     if (!oneOffName.trim()) return
@@ -488,7 +488,8 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
         </DndContext>
       )}
 
-      <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>      <p className="text-xs text-gray-500 mb-2">
+      <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>
+      <p className="text-xs text-gray-500 mb-2">
         Optional. Add a checkpoint for every spot on the course a coach will be timing from, in
         order. Leave empty for a simple single finish-line race.
       </p>
