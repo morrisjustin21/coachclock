@@ -13,7 +13,8 @@ function generateJoinCode() {
 
 export default function RaceList({ session }) {
   const [races, setRaces] = useState([])
-  const [teamId, setTeamId] = useState(null)
+  const [teams, setTeams] = useState([])
+  const [selectedTeamId, setSelectedTeamId] = useState('none')
   const [name, setName] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -27,13 +28,22 @@ export default function RaceList({ session }) {
   async function loadRaces() {
     setLoading(true)
 
-    const { data: membership } = await supabase
+    const { data: memberships } = await supabase
       .from('team_members')
       .select('team_id')
       .eq('coach_id', session.user.id)
-      .maybeSingle()
-    const myTeamId = membership?.team_id || null
-    setTeamId(myTeamId)
+    const teamIds = (memberships || []).map((m) => m.team_id)
+
+    let myTeams = []
+    if (teamIds.length > 0) {
+      const { data: teamRows } = await supabase
+        .from('teams')
+        .select('id, name')
+        .in('id', teamIds)
+        .order('name', { ascending: true })
+      myTeams = teamRows || []
+    }
+    setTeams(myTeams)
 
     const { data: ownRaces } = await supabase
       .from('races')
@@ -43,11 +53,11 @@ export default function RaceList({ session }) {
 
     let combined = ownRaces || []
 
-    if (myTeamId) {
+    if (teamIds.length > 0) {
       const { data: teamRaces } = await supabase
         .from('races')
         .select('*')
-        .eq('team_id', myTeamId)
+        .in('team_id', teamIds)
         .order('created_at', { ascending: false })
       const existingIds = new Set(combined.map((r) => r.id))
       combined = [...combined, ...(teamRaces || []).filter((r) => !existingIds.has(r.id))]
@@ -71,7 +81,7 @@ export default function RaceList({ session }) {
           name: name.trim(),
           coach_id: session.user.id,
           join_code: generateJoinCode(),
-          team_id: teamId,
+          team_id: selectedTeamId === 'none' ? null : selectedTeamId,
         })
         .select()
         .single()
@@ -137,14 +147,28 @@ export default function RaceList({ session }) {
         </div>
       </div>
 
-      <form onSubmit={createRace} className="flex gap-2 mb-2">
+      <form onSubmit={createRace} className="flex flex-wrap gap-2 mb-2">
         <input
           type="text"
           placeholder="New race name (e.g. Duncan Invitational - Varsity Boys)"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          className="flex-1 min-w-[200px] border border-gray-300 rounded-lg px-3 py-2 text-sm"
         />
+        {teams.length > 0 && (
+          <select
+            value={selectedTeamId}
+            onChange={(e) => setSelectedTeamId(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          >
+            <option value="none">No team</option>
+            {teams.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        )}
         <button className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium">
           Create
         </button>
@@ -165,7 +189,7 @@ export default function RaceList({ session }) {
                     {r.name}
                     {r.team_id && (
                       <span className="text-[10px] uppercase tracking-wide text-gray-400 border border-gray-200 rounded-full px-1.5 py-0.5">
-                        Team
+                        {teams.find((t) => t.id === r.team_id)?.name || 'Team'}
                       </span>
                     )}
                   </div>
