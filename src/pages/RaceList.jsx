@@ -13,6 +13,7 @@ function generateJoinCode() {
 
 export default function RaceList({ session }) {
   const [races, setRaces] = useState([])
+  const [teamId, setTeamId] = useState(null)
   const [name, setName] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -25,12 +26,35 @@ export default function RaceList({ session }) {
 
   async function loadRaces() {
     setLoading(true)
-    const { data, error } = await supabase
+
+    const { data: membership } = await supabase
+      .from('team_members')
+      .select('team_id')
+      .eq('coach_id', session.user.id)
+      .maybeSingle()
+    const myTeamId = membership?.team_id || null
+    setTeamId(myTeamId)
+
+    const { data: ownRaces } = await supabase
       .from('races')
       .select('*')
       .eq('coach_id', session.user.id)
       .order('created_at', { ascending: false })
-    if (!error) setRaces(data)
+
+    let combined = ownRaces || []
+
+    if (myTeamId) {
+      const { data: teamRaces } = await supabase
+        .from('races')
+        .select('*')
+        .eq('team_id', myTeamId)
+        .order('created_at', { ascending: false })
+      const existingIds = new Set(combined.map((r) => r.id))
+      combined = [...combined, ...(teamRaces || []).filter((r) => !existingIds.has(r.id))]
+      combined.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    }
+
+    setRaces(combined)
     setLoading(false)
   }
 
@@ -43,7 +67,12 @@ export default function RaceList({ session }) {
     for (let attempt = 0; attempt < 3; attempt++) {
       const { data, error } = await supabase
         .from('races')
-        .insert({ name: name.trim(), coach_id: session.user.id, join_code: generateJoinCode() })
+        .insert({
+          name: name.trim(),
+          coach_id: session.user.id,
+          join_code: generateJoinCode(),
+          team_id: teamId,
+        })
         .select()
         .single()
 
@@ -84,78 +113,4 @@ export default function RaceList({ session }) {
     }
   }
 
-  async function signOut() {
-    await supabase.auth.signOut()
-  }
-
-  return (
-    <div className="max-w-2xl mx-auto px-4 py-8">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl font-semibold">Your races</h1>
-        <div className="flex items-center gap-4">
-          <Link to="/join" className="text-sm text-gray-500 underline">
-            Join a race
-          </Link>
-          <Link to="/roster" className="text-sm text-gray-500 underline">
-            Team roster
-          </Link>
-          <button onClick={signOut} className="text-sm text-gray-500 underline">
-            Sign out
-          </button>
-        </div>
-      </div>
-
-      <form onSubmit={createRace} className="flex gap-2 mb-2">
-        <input
-          type="text"
-          placeholder="New race name (e.g. Duncan Invitational - Varsity Boys)"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
-        />
-        <button className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium">
-          Create
-        </button>
-      </form>
-      {error && <p className="text-sm text-red-600 mb-6">{error}</p>}
-
-      {loading ? (
-        <p className="text-sm text-gray-500">Loading...</p>
-      ) : races.length === 0 ? (
-        <p className="text-sm text-gray-500">No races yet. Create one above.</p>
-      ) : (
-        <ul className="space-y-2">
-          {races.map((r) => (
-            <li key={r.id} className="border border-gray-200 rounded-lg px-4 py-3">
-              <div className="flex items-center gap-2">
-                <Link to={`/race/${r.id}`} className="flex-1 block hover:opacity-70">
-                  <div className="font-medium text-sm">{r.name}</div>
-                  <div className="text-xs text-gray-500">
-                    {new Date(r.created_at).toLocaleDateString()} · {r.status}
-                  </div>
-                </Link>
-                <button
-                  onClick={() => deleteRace(r)}
-                  className="text-gray-400 hover:text-red-600 text-sm px-2"
-                  aria-label={`Delete ${r.name}`}
-                >
-                  ✕
-                </button>
-              </div>
-              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
-                <span className="text-xs text-gray-400">Join code:</span>
-                <span className="text-xs font-mono font-semibold tracking-wider">{r.join_code}</span>
-                <button
-                  onClick={() => copyCode(r)}
-                  className="text-xs text-gray-500 underline ml-1"
-                >
-                  {copiedId === r.id ? 'Copied!' : 'Copy'}
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
+  async function
