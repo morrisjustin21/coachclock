@@ -12,54 +12,68 @@ function generateJoinCode() {
 }
 
 export default function Team({ session }) {
-  const [team, setTeam] = useState(null)
-  const [isTeamOwner, setIsTeamOwner] = useState(false)
-  const [memberCount, setMemberCount] = useState(0)
+  const [teams, setTeams] = useState([]) // { id, name, join_code, owner_coach_id, isOwner, memberCount }
+  const [activeTeamId, setActiveTeamId] = useState(null)
   const [races, setRaces] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
+  const [showCreate, setShowCreate] = useState(false)
+  const [showJoin, setShowJoin] = useState(false)
   const [teamName, setTeamName] = useState('')
   const [joinCode, setJoinCode] = useState('')
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(false)
 
+  const activeTeam = teams.find((t) => t.id === activeTeamId) || null
+
   useEffect(() => {
-    loadTeam()
+    loadTeams()
   }, [])
 
-  async function loadTeam() {
+  useEffect(() => {
+    if (activeTeamId) loadRaces(activeTeamId)
+  }, [activeTeamId])
+
+  async function loadTeams() {
     setLoading(true)
-    const { data: membership } = await supabase
+    const { data: memberships } = await supabase
       .from('team_members')
       .select('team_id')
       .eq('coach_id', session.user.id)
-      .maybeSingle()
 
-    if (!membership) {
-      setTeam(null)
+    if (!memberships || memberships.length === 0) {
+      setTeams([])
+      setActiveTeamId(null)
       setLoading(false)
       return
     }
 
-    const { data: teamRow } = await supabase.from('teams').select('*').eq('id', membership.team_id).single()
-    setTeam(teamRow)
-    setIsTeamOwner(teamRow?.owner_coach_id === session.user.id)
+    const teamIds = memberships.map((m) => m.team_id)
+    const { data: teamRows } = await supabase.from('teams').select('*').in('id', teamIds)
 
-    const { count } = await supabase
-      .from('team_members')
-      .select('id', { count: 'exact', head: true })
-      .eq('team_id', membership.team_id)
-    setMemberCount(count || 0)
+    const withCounts = await Promise.all(
+      (teamRows || []).map(async (t) => {
+        const { count } = await supabase
+          .from('team_members')
+          .select('id', { count: 'exact', head: true })
+          .eq('team_id', t.id)
+        return { ...t, isOwner: t.owner_coach_id === session.user.id, memberCount: count || 0 }
+      })
+    )
 
-    const { data: teamRaces } = await supabase
+    setTeams(withCounts)
+    setActiveTeamId((prev) => (prev && withCounts.some((t) => t.id === prev) ? prev : withCounts[0]?.id || null))
+    setLoading(false)
+  }
+
+  async function loadRaces(teamId) {
+    const { data } = await supabase
       .from('races')
       .select('*')
-      .eq('team_id', membership.team_id)
+      .eq('team_id', teamId)
       .order('created_at', { ascending: false })
-    setRaces(teamRaces || [])
-
-    setLoading(false)
+    setRaces(data || [])
   }
 
   async function createTeam(e) {
@@ -84,7 +98,10 @@ export default function Team({ session }) {
           setError(`Team was created, but adding you to it failed: ${memberError.message}`)
           return
         }
-        loadTeam()
+        setTeamName('')
+        setShowCreate(false)
+        await loadTeams()
+        setActiveTeamId(data.id)
         return
       }
       if (!String(error.message).toLowerCase().includes('join_code')) {
@@ -124,19 +141,23 @@ export default function Team({ session }) {
 
     if (joinError) {
       setError(
-        joinError.message.includes('duplicate')
-          ? "You already belong to a team. Leave your current team first if you want to switch."
+        joinError.message.toLowerCase().includes('duplicate')
+          ? "You're already on that team."
           : joinError.message
       )
       return
     }
 
-    loadTeam()
+    setJoinCode('')
+    setShowJoin(false)
+    await loadTeams()
+    setActiveTeamId(teamRow.id)
   }
 
   async function copyCode() {
+    if (!activeTeam) return
     try {
-      await navigator.clipboard.writeText(team.join_code)
+      await navigator.clipboard.writeText(activeTeam.join_code)
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch {
@@ -145,122 +166,161 @@ export default function Team({ session }) {
   }
 
   async function leaveTeam() {
+    if (!activeTeam) return
     const confirmed = window.confirm(
-      isTeamOwner
-        ? "Leave this team? Since you created it, this also removes every other coach's membership. Races already created stay as they are."
-        : "Leave this team? You'll lose automatic access to its races until you rejoin with the team code."
+      activeTeam.isOwner
+        ? `Leave "${activeTeam.name}"? Since you created it, this also removes every other coach's membership. Races already created stay as they are.`
+        : `Leave "${activeTeam.name}"? You'll lose automatic access to its races until you rejoin with the team code.`
     )
     if (!confirmed) return
 
-    if (isTeamOwner) {
-      await supabase.from('teams').delete().eq('id', team.id)
+    if (activeTeam.isOwner) {
+      await supabase.from('teams').delete().eq('id', activeTeam.id)
     } else {
-      await supabase.from('team_members').delete().eq('coach_id', session.user.id)
+      await supabase.from('team_members').delete().eq('team_id', activeTeam.id).eq('coach_id', session.user.id)
     }
-    loadTeam()
+    setActiveTeamId(null)
+    loadTeams()
   }
 
   if (loading) return <p className="text-center py-8 text-sm text-gray-500">Loading...</p>
-
-  if (!team) {
-    return (
-      <div className="max-w-sm mx-auto px-4 py-8">
-        <Link to="/" className="text-sm text-gray-500 underline">
-          &larr; All races
-        </Link>
-        <h1 className="text-xl font-semibold mt-2 mb-1">Team</h1>
-        <p className="text-sm text-gray-500 mb-6">
-          Create a team so every coach on your staff can see the whole season in one place.
-        </p>
-
-        <form onSubmit={createTeam} className="space-y-2 mb-8">
-          <h2 className="text-sm font-medium text-gray-700">Create a team</h2>
-          <input
-            type="text"
-            placeholder="Team name (e.g. Duncan Demons)"
-            value={teamName}
-            onChange={(e) => setTeamName(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-          />
-          <button
-            disabled={busy}
-            className="w-full bg-gray-900 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
-          >
-            {busy ? 'Creating...' : 'Create team'}
-          </button>
-        </form>
-
-        <form onSubmit={joinTeam} className="space-y-2">
-          <h2 className="text-sm font-medium text-gray-700">Or join a team</h2>
-          <input
-            type="text"
-            placeholder="Team code (e.g. K7M2QX)"
-            value={joinCode}
-            onChange={(e) => setJoinCode(e.target.value)}
-            maxLength={6}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono tracking-widest uppercase"
-          />
-          <button
-            disabled={busy}
-            className="w-full border border-gray-300 rounded-lg py-2 text-sm font-medium disabled:opacity-50"
-          >
-            {busy ? 'Joining...' : 'Join team'}
-          </button>
-        </form>
-
-        {error && <p className="text-sm text-red-600 mt-4">{error}</p>}
-      </div>
-    )
-  }
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
       <Link to="/" className="text-sm text-gray-500 underline">
         &larr; All races
       </Link>
-      <h1 className="text-xl font-semibold mt-2 mb-1">{team.name}</h1>
-      <p className="text-sm text-gray-500 mb-4">
-        {memberCount} coach{memberCount === 1 ? '' : 'es'} on this team
-      </p>
+      <h1 className="text-xl font-semibold mt-2 mb-4">Teams</h1>
 
-      {isTeamOwner && (
-        <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 mb-6 flex items-center gap-2">
-          <span className="text-xs text-gray-500">Team code — season-long, share with your staff:</span>
-          <span className="text-sm font-mono font-semibold tracking-wider">{team.join_code}</span>
-          <button onClick={copyCode} className="text-xs text-gray-700 underline ml-auto">
-            {copied ? 'Copied!' : 'Copy'}
-          </button>
+      {teams.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
+          {teams.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTeamId(t.id)}
+              className={`whitespace-nowrap text-sm px-3 py-1.5 rounded-full border ${
+                t.id === activeTeamId
+                  ? 'bg-gray-900 text-white border-gray-900 font-medium'
+                  : 'border-gray-300 text-gray-600'
+              }`}
+            >
+              {t.name}
+            </button>
+          ))}
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-sm font-medium text-gray-700">Season races ({races.length})</h2>
-        <button onClick={leaveTeam} className="text-xs text-red-600 underline">
-          Leave team
+      <div className="flex gap-2 mb-6">
+        <button
+          onClick={() => {
+            setShowCreate((v) => !v)
+            setShowJoin(false)
+          }}
+          className="text-sm border border-gray-300 rounded-lg px-3 py-1.5"
+        >
+          + Create a team
+        </button>
+        <button
+          onClick={() => {
+            setShowJoin((v) => !v)
+            setShowCreate(false)
+          }}
+          className="text-sm border border-gray-300 rounded-lg px-3 py-1.5"
+        >
+          Join a team
         </button>
       </div>
 
-      {races.length === 0 ? (
-        <p className="text-sm text-gray-400">No races yet. Create one from the races page and it'll show up here.</p>
-      ) : (
-        <ul className="space-y-2">
-          {races.map((r) => (
-            <li key={r.id}>
-              <Link
-                to={`/race/${r.id}`}
-                className="block border border-gray-200 rounded-lg px-4 py-3 hover:bg-gray-50"
-              >
-                <div className="font-medium text-sm">{r.name}</div>
-                <div className="text-xs text-gray-500">
-                  {new Date(r.created_at).toLocaleDateString()} · {r.status}
-                </div>
-              </Link>
-            </li>
-          ))}
-        </ul>
+      {showCreate && (
+        <form onSubmit={createTeam} className="flex gap-2 mb-6">
+          <input
+            type="text"
+            placeholder="Team name (e.g. Duncan Demons - Middle School)"
+            value={teamName}
+            onChange={(e) => setTeamName(e.target.value)}
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+          />
+          <button
+            disabled={busy}
+            className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            {busy ? 'Creating...' : 'Create'}
+          </button>
+        </form>
       )}
 
-      {error && <p className="text-sm text-red-600 mt-4">{error}</p>}
+      {showJoin && (
+        <form onSubmit={joinTeam} className="flex gap-2 mb-6">
+          <input
+            type="text"
+            placeholder="Team code (e.g. K7M2QX)"
+            value={joinCode}
+            onChange={(e) => setJoinCode(e.target.value)}
+            maxLength={6}
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono tracking-widest uppercase"
+          />
+          <button
+            disabled={busy}
+            className="border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            {busy ? 'Joining...' : 'Join'}
+          </button>
+        </form>
+      )}
+
+      {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
+
+      {!activeTeam ? (
+        <p className="text-sm text-gray-400">
+          You're not on a team yet. Create one or join one with a team code above.
+        </p>
+      ) : (
+        <>
+          <h2 className="text-lg font-semibold mb-1">{activeTeam.name}</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            {activeTeam.memberCount} coach{activeTeam.memberCount === 1 ? '' : 'es'} on this team
+          </p>
+
+          {activeTeam.isOwner && (
+            <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 mb-6 flex items-center gap-2">
+              <span className="text-xs text-gray-500">Team code — season-long, share with your staff:</span>
+              <span className="text-sm font-mono font-semibold tracking-wider">{activeTeam.join_code}</span>
+              <button onClick={copyCode} className="text-xs text-gray-700 underline ml-auto">
+                {copied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-medium text-gray-700">Season races ({races.length})</h3>
+            <button onClick={leaveTeam} className="text-xs text-red-600 underline">
+              Leave team
+            </button>
+          </div>
+
+          {races.length === 0 ? (
+            <p className="text-sm text-gray-400">
+              No races yet. When creating a race, choose "{activeTeam.name}" and it'll show up here.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {races.map((r) => (
+                <li key={r.id}>
+                  <Link
+                    to={`/race/${r.id}`}
+                    className="block border border-gray-200 rounded-lg px-4 py-3 hover:bg-gray-50"
+                  >
+                    <div className="font-medium text-sm">{r.name}</div>
+                    <div className="text-xs text-gray-500">
+                      {new Date(r.created_at).toLocaleDateString()} · {r.status}
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
     </div>
   )
 }
