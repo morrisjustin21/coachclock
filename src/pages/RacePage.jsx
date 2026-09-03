@@ -16,6 +16,7 @@ const CHECKPOINT_PRESETS = ['1000m', '2000m', '3000m', '4000m', '1mi', '2mi', '3
 export default function RacePage({ session }) {
   const { raceId } = useParams()
   const [race, setRace] = useState(null)
+  const [team, setTeam] = useState(null)
   const [teamAthletes, setTeamAthletes] = useState([])
   const [raceAthletes, setRaceAthletes] = useState([])
   const [checkpoints, setCheckpoints] = useState([])
@@ -66,13 +67,25 @@ export default function RacePage({ session }) {
   async function loadRace() {
     const { data } = await supabase.from('races').select('*').eq('id', raceId).single()
     setRace(data)
+
+    if (data?.team_id) {
+      const { data: teamRow } = await supabase
+        .from('teams')
+        .select('id, name, photo_url')
+        .eq('id', data.team_id)
+        .maybeSingle()
+      setTeam(teamRow || null)
+    } else {
+      setTeam(null)
+    }
+
     if (data && data.coach_id === session?.user?.id) {
       let query = supabase.from('team_athletes').select('*').order('name', { ascending: true })
       query = data.team_id
         ? query.eq('team_id', data.team_id) // whole team's shared roster for this race's team
         : query.is('team_id', null).eq('coach_id', session.user.id) // solo race - just your untagged athletes
-      const { data: team } = await query
-      if (team) setTeamAthletes(team)
+      const { data: rosterRows } = await query
+      if (rosterRows) setTeamAthletes(rosterRows)
     }
   }
 
@@ -160,6 +173,7 @@ export default function RacePage({ session }) {
       {race.status !== 'setup' && showReport && (
         <RaceReport
           race={race}
+          team={team}
           raceAthletes={raceAthletes}
           checkpoints={checkpoints}
           splits={splits}
@@ -913,7 +927,7 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
   )
 }
 
-function RaceReport({ race, raceAthletes, checkpoints, splits, onBack }) {
+function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
   const { sortedCheckpoints, rows } = buildReportRows(checkpoints, raceAthletes, splits)
 
   return (
@@ -921,6 +935,19 @@ function RaceReport({ race, raceAthletes, checkpoints, splits, onBack }) {
       <button onClick={onBack} className="text-sm text-gray-500 underline mb-4">
         &larr; Back to race
       </button>
+
+      {team && (
+        <div className="flex items-center gap-3 mb-4">
+          {team.photo_url && (
+            <img src={team.photo_url} alt="" className="w-12 h-12 rounded-lg object-cover border border-gray-200" />
+          )}
+          <div>
+            <div className="text-sm font-medium text-gray-700">{team.name}</div>
+            <div className="text-xs text-gray-400">{race.name}</div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold">Full report</h2>
         <button
