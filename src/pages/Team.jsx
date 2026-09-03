@@ -76,8 +76,14 @@ export default function Team({ session }) {
         .single()
 
       if (!error) {
-        await supabase.from('team_members').insert({ team_id: data.id, coach_id: session.user.id })
+        const { error: memberError } = await supabase
+          .from('team_members')
+          .insert({ team_id: data.id, coach_id: session.user.id })
         setBusy(false)
+        if (memberError) {
+          setError(`Team was created, but adding you to it failed: ${memberError.message}`)
+          return
+        }
         loadTeam()
         return
       }
