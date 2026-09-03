@@ -459,7 +459,8 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
             ? 'Auto-sorted by each runner\'s most recent finish time — drag the ⠿ handle to adjust'
             : 'Drag the ⠿ handle to reorder'}
         </p>
-      )}      {roster.length > 0 && (
+      )}
+      {roster.length > 0 && (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleRosterDragEnd}>
           <SortableContext items={roster.map((r) => r.key)} strategy={verticalListSortingStrategy}>
             <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6 overflow-hidden">
@@ -471,8 +472,7 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
         </DndContext>
       )}
 
-      <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>
-      <p className="text-xs text-gray-500 mb-2">
+      <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>      <p className="text-xs text-gray-500 mb-2">
         Optional. Add a checkpoint for every spot on the course a coach will be timing from, in
         order. Leave empty for a simple single finish-line race.
       </p>
@@ -731,12 +731,46 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
     return splits.filter((s) => s.checkpoint_id === cp.id).length
   }
 
+  const [linkCopied, setLinkCopied] = useState(false)
+  const [showQr, setShowQr] = useState(false)
+  const resultsUrl = typeof window !== 'undefined' ? window.location.href : ''
+  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(resultsUrl)}`
+
+  async function copyResultsLink() {
+    try {
+      await navigator.clipboard.writeText(resultsUrl)
+      setLinkCopied(true)
+      setTimeout(() => setLinkCopied(false), 1500)
+    } catch {
+      // ignore
+    }
+  }
+
   return (
     <div>
       {isOwner && (
-        <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 mb-4 flex items-center gap-2">
-          <span className="text-xs text-gray-500">Join code:</span>
-          <span className="text-sm font-mono font-semibold tracking-wider">{race.join_code}</span>
+        <div className="space-y-2 mb-4">
+          <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2">
+            <span className="text-xs text-gray-500">Coach join code:</span>
+            <span className="text-sm font-mono font-semibold tracking-wider">{race.join_code}</span>
+          </div>
+          <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2">
+            <span className="text-xs text-gray-500">Results link for parents &amp; fans:</span>
+            <button onClick={copyResultsLink} className="text-xs text-gray-700 underline ml-auto">
+              {linkCopied ? 'Copied!' : 'Copy link'}
+            </button>
+            <button onClick={() => setShowQr((v) => !v)} className="text-xs text-gray-700 underline">
+              {showQr ? 'Hide QR' : 'QR code'}
+            </button>
+          </div>
+          {showQr && (
+            <div className="flex justify-center py-2">
+              <img src={qrSrc} alt="QR code linking to live race results" width={180} height={180} />
+            </div>
+          )}
+          <p className="text-xs text-gray-400 px-1">
+            Anyone with this link or QR code can view live results — no account needed, and they can't record times.
+          </p>
         </div>
       )}
 
