@@ -25,13 +25,22 @@ export default function TeamRoster({ session }) {
   const [genderFilter, setGenderFilter] = useState('all')
   const [gradeFilter, setGradeFilter] = useState('all')
 
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [moveTargetTeamId, setMoveTargetTeamId] = useState('')
+  const [moving, setMoving] = useState(false)
+
   useEffect(() => {
     loadTeams()
   }, [])
 
   useEffect(() => {
     loadRoster()
+    setSelectedIds(new Set())
   }, [activeTeamId, viewMode])
+
+  useEffect(() => {
+    if (teams.length > 0 && !moveTargetTeamId) setMoveTargetTeamId(teams[0].id)
+  }, [teams])
 
   async function loadTeams() {
     const { data: memberships } = await supabase
@@ -145,6 +154,42 @@ export default function TeamRoster({ session }) {
     loadRoster()
   }
 
+  function toggleSelect(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSelectAllFiltered() {
+    const filteredIds = filtered.map((a) => a.id)
+    const allSelected = filteredIds.length > 0 && filteredIds.every((id) => selectedIds.has(id))
+    setSelectedIds(allSelected ? new Set() : new Set(filteredIds))
+  }
+
+  async function moveSelectedToTeam() {
+    if (selectedIds.size === 0 || !moveTargetTeamId) return
+    setMoving(true)
+    setError('')
+
+    const { error } = await supabase
+      .from('team_athletes')
+      .update({ team_id: moveTargetTeamId })
+      .in('id', Array.from(selectedIds))
+
+    setMoving(false)
+
+    if (error) {
+      setError(error.message)
+      return
+    }
+
+    setSelectedIds(new Set())
+    loadRoster()
+  }
+
   async function deleteAll() {
     if (athletes.length === 0) return
     const label = activeTeamId === 'none' ? 'your personal (no team) roster' : "this team's roster"
@@ -194,6 +239,7 @@ export default function TeamRoster({ session }) {
   }
 
   const canEdit = viewMode === 'mine'
+  const showMoveTools = canEdit && activeTeamId === 'none' && teams.length > 0
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
@@ -324,6 +370,33 @@ export default function TeamRoster({ session }) {
 
       {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
 
+      {showMoveTools && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 mb-4 flex flex-wrap items-center gap-2">
+          <button onClick={toggleSelectAllFiltered} className="text-xs text-blue-700 underline">
+            {filtered.length > 0 && filtered.every((a) => selectedIds.has(a.id)) ? 'Deselect all' : 'Select all'}
+          </button>
+          <span className="text-xs text-blue-700">{selectedIds.size} selected</span>
+          <select
+            value={moveTargetTeamId}
+            onChange={(e) => setMoveTargetTeamId(e.target.value)}
+            className="text-xs border border-blue-300 rounded-lg px-2 py-1 ml-auto"
+          >
+            {teams.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={moveSelectedToTeam}
+            disabled={selectedIds.size === 0 || moving}
+            className="text-xs bg-blue-600 text-white rounded-lg px-3 py-1 disabled:opacity-40"
+          >
+            {moving ? 'Moving...' : 'Move to team'}
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-2 mb-4 items-center">
         <span className="text-xs text-gray-400 mr-1">Filter:</span>
         <button
@@ -386,7 +459,14 @@ export default function TeamRoster({ session }) {
                           key={a.id}
                           className="flex items-center justify-between border-b border-gray-100 py-2 text-sm"
                         >
-                          <span>
+                          <span className="flex items-center gap-2">
+                            {showMoveTools && (
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.has(a.id)}
+                                onChange={() => toggleSelect(a.id)}
+                              />
+                            )}
                             {a.name}
                             {a.bib && <span className="text-gray-400 ml-2">#{a.bib}</span>}
                           </span>
