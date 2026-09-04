@@ -810,17 +810,19 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
         <div className="text-5xl font-semibold tabular-nums">{formatTime(elapsed)}</div>
       </div>
 
-      {isOwner && (
+      {canRecord && (
         <div className="flex gap-2 justify-center mb-4">
           <button onClick={handleStartStop} className="min-w-[100px] border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium">
             {localRace.running ? 'Stop' : elapsed > 0 ? 'Resume' : 'Start'}
           </button>
-          <button
-            onClick={resetRace}
-            className="border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm font-medium"
-          >
-            Reset race
-          </button>
+          {isOwner && (
+            <button
+              onClick={resetRace}
+              className="border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm font-medium"
+            >
+              Reset race
+            </button>
+          )}
         </div>
       )}
 
