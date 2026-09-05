@@ -639,6 +639,68 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
     }
   }, [checkpoints.length])
 
+  // Personal bests per team_athlete_id + checkpoint label, drawn from every other race
+  // in this athlete's history (same team if the race belongs to one, else same coach).
+  // Loaded once so PR checks stay purely client-side - no network dependency mid-tap.
+  const [personalBests, setPersonalBests] = useState({})
+
+  useEffect(() => {
+    loadPersonalBests()
+  }, [race.id])
+
+  async function loadPersonalBests() {
+    let pastRacesQuery = supabase.from('races').select('id').neq('id', race.id)
+    pastRacesQuery = race.team_id
+      ? pastRacesQuery.eq('team_id', race.team_id)
+      : pastRacesQuery.eq('coach_id', race.coach_id)
+    const { data: pastRaces } = await pastRacesQuery
+    if (!pastRaces || pastRaces.length === 0) {
+      setPersonalBests({})
+      return
+    }
+    const raceIds = pastRaces.map((r) => r.id)
+
+    const [{ data: pastAthletes }, { data: pastCheckpoints }, { data: pastSplits }] = await Promise.all([
+      supabase.from('athletes').select('id, team_athlete_id').in('race_id', raceIds),
+      supabase.from('checkpoints').select('id, label').in('race_id', raceIds),
+      supabase.from('splits').select('athlete_id, checkpoint_id, recorded_time_ms').in('race_id', raceIds),
+    ])
+    if (!pastAthletes || !pastCheckpoints || !pastSplits) return
+
+    const teamIdByAthleteRow = {}
+    pastAthletes.forEach((a) => {
+      teamIdByAthleteRow[a.id] = a.team_athlete_id
+    })
+    const labelByCheckpoint = {}
+    pastCheckpoints.forEach((cp) => {
+      labelByCheckpoint[cp.id] = cp.label
+    })
+
+    const bests = {}
+    pastSplits.forEach((s) => {
+      const teamAthleteId = teamIdByAthleteRow[s.athlete_id]
+      const label = labelByCheckpoint[s.checkpoint_id]
+      if (!teamAthleteId || !label) return
+      const key = `${teamAthleteId}|${label}`
+      if (bests[key] == null || s.recorded_time_ms < bests[key]) {
+        bests[key] = s.recorded_time_ms
+      }
+    })
+    setPersonalBests(bests)
+  }
+
+  const teamAthleteIdByRaceRow = {}
+  raceAthletes.forEach((a) => {
+    teamAthleteIdByRaceRow[a.id] = a.team_athlete_id
+  })
+
+  function isNewPR(split, checkpointLabel) {
+    const teamAthleteId = teamAthleteIdByRaceRow[split.athlete_id]
+    if (!teamAthleteId || !checkpointLabel) return false
+    const best = personalBests[`${teamAthleteId}|${checkpointLabel}`]
+    return best != null && split.recorded_time_ms < best
+  }
+
   const queueKey = `splits-${race.id}`
   const [localPendingSplits, setLocalPendingSplits] = useState(() => getQueued(queueKey).map((q) => q.payload))
   const [removedIds, setRemovedIds] = useState(new Set())
@@ -953,7 +1015,14 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
             {finishedInOrder.map((s, i) => (
               <tr key={s.id} className="border-b border-gray-100">
                 <td className="py-2 text-gray-400 w-8">{i + 1}</td>
-                <td className="py-2">{s.label}</td>
+                <td className="py-2">
+                  {s.label}
+                  {isNewPR(s, activeCheckpoint?.label) && (
+                    <span className="ml-2 text-[10px] font-bold uppercase tracking-wide bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                      PR
+                    </span>
+                  )}
+                </td>
                 <td className="py-2 text-right tabular-nums font-medium">{formatTime(s.recorded_time_ms)}</td>
               </tr>
             ))}
