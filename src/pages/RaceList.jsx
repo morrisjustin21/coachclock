@@ -132,17 +132,8 @@ export default function RaceList({ session }) {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-xl font-semibold">Your races</h1>
         <div className="flex items-center gap-4">
-          <Link to="/team" className="text-sm text-gray-500 underline">
-            Team
-          </Link>
-          <Link to="/workouts" className="text-sm text-gray-500 underline">
-            Practice
-          </Link>
           <Link to="/join" className="text-sm text-gray-500 underline">
             Join a race
-          </Link>
-          <Link to="/roster" className="text-sm text-gray-500 underline">
-            Team roster
           </Link>
           <button onClick={signOut} className="text-sm text-gray-500 underline">
             Sign out
