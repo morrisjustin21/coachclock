@@ -580,6 +580,24 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
   )
 }
 
+function playTapConfirmation() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    const oscillator = ctx.createOscillator()
+    const gain = ctx.createGain()
+    oscillator.connect(gain)
+    gain.connect(ctx.destination)
+    oscillator.frequency.value = 880
+    gain.gain.setValueAtTime(0.15, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12)
+    oscillator.start()
+    oscillator.stop(ctx.currentTime + 0.12)
+  } catch {
+    // Web Audio unavailable - fail silently, tap still records fine
+  }
+  if (navigator.vibrate) navigator.vibrate(40) // no-op on iOS Safari, works on most Android browsers
+}
+
 function computeElapsed(raceLike) {
   if (!raceLike) return 0
   const base = raceLike.accumulated_ms || 0
@@ -690,6 +708,7 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
   async function recordFinish(athlete) {
     if (!localRace.running || !activeCheckpoint) return
     const time = computeElapsed(localRace)
+    playTapConfirmation()
     const tempId = `pending-${athlete.id}-${Date.now()}`
     inFlightRef.current[tempId] = { cancelled: false, realId: null }
     setPendingSplits((prev) => [
@@ -935,7 +954,7 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
 
   return (
     <div>
-      <button onClick={onBack} className="text-sm text-gray-500 underline mb-4">
+      <button onClick={onBack} className="text-sm text-gray-500 underline mb-4 print:hidden">
         &larr; Back to race
       </button>
 
@@ -951,14 +970,31 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-4">
+      {/* Shows only when printing - gives the page a proper letterhead even without a team photo */}
+      <div className="hidden print:block mb-4">
+        <div className="text-lg font-bold">{race.name}</div>
+        <div className="text-sm text-gray-500">
+          {new Date(race.created_at).toLocaleDateString(undefined, {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          })}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between mb-4 print:hidden">
         <h2 className="text-lg font-semibold">Full report</h2>
-        <button
-          onClick={() => downloadReportCSV(race.name, checkpoints, raceAthletes, splits)}
-          className="text-xs text-gray-500 underline"
-        >
-          Download CSV
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={() => window.print()} className="text-xs text-gray-500 underline">
+            Print
+          </button>
+          <button
+            onClick={() => downloadReportCSV(race.name, checkpoints, raceAthletes, splits)}
+            className="text-xs text-gray-500 underline"
+          >
+            Download CSV
+          </button>
+        </div>
       </div>
 
       <div className="overflow-x-auto">
