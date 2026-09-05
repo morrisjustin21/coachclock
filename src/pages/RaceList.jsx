@@ -135,6 +135,9 @@ export default function RaceList({ session }) {
           <Link to="/team" className="text-sm text-gray-500 underline">
             Team
           </Link>
+          <Link to="/workouts" className="text-sm text-gray-500 underline">
+            Practice
+          </Link>
           <Link to="/join" className="text-sm text-gray-500 underline">
             Join a race
           </Link>
