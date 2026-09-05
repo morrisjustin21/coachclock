@@ -1046,12 +1046,19 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
 
   return (
     <div>
+      <style>{`
+        @media print {
+          @page { size: letter portrait; margin: 0.4in; }
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
+      `}</style>
+
       <button onClick={onBack} className="text-sm text-gray-500 underline mb-4 print:hidden">
         &larr; Back to race
       </button>
 
       {team && (
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center gap-3 mb-4 print:hidden">
           {team.photo_url && (
             <img src={team.photo_url} alt="" className="w-12 h-12 rounded-lg object-cover border border-gray-200" />
           )}
@@ -1062,15 +1069,21 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
         </div>
       )}
 
-      {/* Shows only when printing - gives the page a proper letterhead even without a team photo */}
-      <div className="hidden print:block mb-4">
-        <div className="text-lg font-bold">{race.name}</div>
-        <div className="text-sm text-gray-500">
-          {new Date(race.created_at).toLocaleDateString(undefined, {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-          })}
+      {/* Print-only letterhead */}
+      <div className="hidden print:flex items-center gap-3 border-b-2 border-gray-900 pb-2 mb-3">
+        {team?.photo_url && (
+          <img src={team.photo_url} alt="" className="w-9 h-9 rounded object-cover" />
+        )}
+        <div>
+          <div className="text-base font-extrabold leading-tight">{team ? team.name : race.name}</div>
+          <div className="text-xs text-gray-600">
+            {team && <>{race.name} · </>}
+            {new Date(race.created_at).toLocaleDateString(undefined, {
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+            })}
+          </div>
         </div>
       </div>
 
@@ -1090,24 +1103,33 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
       </div>
 
       <div className="overflow-x-auto">
-        <table className="text-sm border-collapse">
+        <table className="text-sm print:text-[7.5px] border-collapse w-full">
           <thead>
             <tr>
-              <th className="text-left py-2 pr-4 sticky left-0 bg-white">Runner</th>
+              <th className="text-left py-2 print:py-1 pr-4 print:pr-2 sticky left-0 bg-white print:static">#</th>
+              <th className="text-left py-2 print:py-1 pr-4 print:pr-2 sticky left-0 bg-white print:static">Runner</th>
               {sortedCheckpoints.map((cp) => (
-                <th key={cp.id} colSpan={2} className="text-center py-2 px-2 border-l border-gray-100">
+                <th
+                  key={cp.id}
+                  colSpan={2}
+                  className="text-center py-2 print:py-1 px-2 print:px-1 border-l border-gray-200 uppercase print:tracking-wide text-gray-500 print:text-[6.5px] font-semibold"
+                >
                   {cp.label}
                 </th>
               ))}
             </tr>
             <tr>
-              <th className="sticky left-0 bg-white"></th>
+              <th className="sticky left-0 bg-white print:static"></th>
+              <th className="sticky left-0 bg-white print:static"></th>
               {sortedCheckpoints.map((cp) => (
                 <>
-                  <th key={`${cp.id}-time`} className="text-xs font-normal text-gray-400 px-2 border-l border-gray-100">
+                  <th
+                    key={`${cp.id}-time`}
+                    className="text-xs print:text-[6.5px] font-normal text-gray-400 px-2 print:px-1 border-l border-gray-200"
+                  >
                     Time
                   </th>
-                  <th key={`${cp.id}-split`} className="text-xs font-normal text-gray-400 px-2">
+                  <th key={`${cp.id}-split`} className="text-xs print:text-[6.5px] font-normal text-gray-400 px-2 print:px-1">
                     Split
                   </th>
                 </>
@@ -1115,15 +1137,28 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ athlete, checkpointCells }) => (
-              <tr key={athlete.id} className="border-t border-gray-100">
-                <td className="py-2 pr-4 font-medium sticky left-0 bg-white">{athlete.name}</td>
+            {rows.map(({ athlete, checkpointCells }, i) => (
+              <tr
+                key={athlete.id}
+                className={`border-t border-gray-100 print:border-gray-200 ${
+                  i % 2 === 1 ? 'print:bg-gray-50' : ''
+                }`}
+              >
+                <td className="py-2 print:py-0.5 pr-4 print:pr-2 text-gray-400 sticky left-0 bg-white print:static print:bg-transparent">
+                  {i + 1}
+                </td>
+                <td className="py-2 print:py-0.5 pr-4 print:pr-2 font-medium sticky left-0 bg-white print:static print:bg-transparent">
+                  {athlete.name}
+                </td>
                 {checkpointCells.map((c) => (
                   <>
-                    <td key={`${c.checkpointId}-time`} className="text-right tabular-nums px-2 border-l border-gray-100">
+                    <td
+                      key={`${c.checkpointId}-time`}
+                      className="text-right tabular-nums px-2 print:px-1 border-l border-gray-100 print:border-gray-200"
+                    >
                       {formatTime(c.cumulative)}
                     </td>
-                    <td key={`${c.checkpointId}-split`} className="text-right tabular-nums px-2 text-gray-500">
+                    <td key={`${c.checkpointId}-split`} className="text-right tabular-nums px-2 print:px-1 text-gray-500">
                       {formatTime(c.segment)}
                     </td>
                   </>
