@@ -470,14 +470,19 @@ export default function TeamRoster({ session }) {
                             {a.name}
                             {a.bib && <span className="text-gray-400 ml-2">#{a.bib}</span>}
                           </span>
-                          {canEdit && (
-                            <button
-                              onClick={() => removeAthlete(a.id)}
-                              className="text-gray-400 hover:text-red-600 text-xs"
-                            >
-                              Remove
-                            </button>
-                          )}
+                          <span className="flex items-center gap-3">
+                            <Link to={`/athlete/${a.id}`} className="text-gray-400 hover:text-gray-700 text-xs underline">
+                              History
+                            </Link>
+                            {canEdit && (
+                              <button
+                                onClick={() => removeAthlete(a.id)}
+                                className="text-gray-400 hover:text-red-600 text-xs"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </span>
                         </li>
                       ))}
                     </ul>
