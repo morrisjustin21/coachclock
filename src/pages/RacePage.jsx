@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { formatTime, downloadCSV, downloadReportCSV, buildReportRows } from '../lib/csv'
+import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
 import {
   arrayMove,
@@ -638,9 +639,50 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
     }
   }, [checkpoints.length])
 
-  const [pendingSplits, setPendingSplits] = useState([])
+  const queueKey = `splits-${race.id}`
+  const [localPendingSplits, setLocalPendingSplits] = useState(() => getQueued(queueKey).map((q) => q.payload))
   const [removedIds, setRemovedIds] = useState(new Set())
-  const inFlightRef = useRef({})
+  const [queueCount, setQueueCount] = useState(() => getQueued(queueKey).length)
+
+  // Drop any locally-held tap once the server confirms it (it'll now appear in `splits`)
+  useEffect(() => {
+    const confirmedIds = new Set(splits.map((s) => s.id))
+    setLocalPendingSplits((prev) => prev.filter((p) => !confirmedIds.has(p.id)))
+  }, [splits])
+
+  // Retry anything still queued: on mount, whenever connectivity returns, and every
+  // few seconds as a fallback in case the 'online' event doesn't fire reliably.
+  useEffect(() => {
+    flushQueueNow()
+    const interval = setInterval(flushQueueNow, 8000)
+    window.addEventListener('online', flushQueueNow)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('online', flushQueueNow)
+    }
+  }, [])
+
+  async function flushQueueNow() {
+    const items = getQueued(queueKey)
+    for (const item of items) {
+      try {
+        let ok = false
+        if (item.action === 'insert') {
+          const { error } = await supabase
+            .from('splits')
+            .upsert(item.payload, { onConflict: 'id', ignoreDuplicates: true })
+          ok = !error
+        } else if (item.action === 'delete') {
+          const { error } = await supabase.from('splits').delete().eq('id', item.payload.id)
+          ok = !error
+        }
+        if (ok) dequeue(queueKey, item.id)
+      } catch {
+        // still offline or request failed - leave it queued, next flush will retry
+      }
+    }
+    setQueueCount(getQueued(queueKey).length)
+  }
 
   async function handleStartStop() {
     if (!localRace.running) {
@@ -664,9 +706,10 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
     if (!confirmed) return
 
     setLocalRace((prev) => ({ ...prev, running: false, started_at: null, accumulated_ms: 0 }))
-    setPendingSplits([])
+    setLocalPendingSplits([])
     setRemovedIds(new Set())
-    inFlightRef.current = {}
+    clearQueue(queueKey)
+    setQueueCount(0)
 
     await supabase.from('races').update({ running: false, started_at: null, accumulated_ms: 0 }).eq('id', race.id)
     await supabase.from('splits').delete().eq('race_id', race.id)
@@ -679,7 +722,7 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
   const splitsForActive = splits.filter((s) => s.checkpoint_id === activeCheckpointId)
   const confirmedAthleteIdsActive = new Set(splitsForActive.map((s) => s.athlete_id))
   const visibleConfirmed = splitsForActive.filter((s) => !removedIds.has(s.id))
-  const visiblePending = pendingSplits.filter(
+  const visiblePending = localPendingSplits.filter(
     (p) => p.checkpoint_id === activeCheckpointId && !confirmedAthleteIdsActive.has(p.athlete_id)
   )
   const finishedInOrder = [...visibleConfirmed, ...visiblePending].sort(
@@ -705,77 +748,45 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
     })
   }
 
-  async function recordFinish(athlete) {
+  function recordFinish(athlete) {
     if (!localRace.running || !activeCheckpoint) return
     const time = computeElapsed(localRace)
     playTapConfirmation()
-    const tempId = `pending-${athlete.id}-${Date.now()}`
-    inFlightRef.current[tempId] = { cancelled: false, realId: null }
-    setPendingSplits((prev) => [
-      ...prev,
-      {
-        id: tempId,
-        athlete_id: athlete.id,
-        checkpoint_id: activeCheckpoint.id,
-        label: athlete.name,
-        recorded_time_ms: time,
-      },
-    ])
 
-    const { data, error } = await supabase
-      .from('splits')
-      .insert({
-        race_id: race.id,
-        athlete_id: athlete.id,
-        checkpoint_id: activeCheckpoint.id,
-        label: athlete.name,
-        recorded_time_ms: time,
-      })
-      .select()
-      .single()
-
-    const flight = inFlightRef.current[tempId]
-
-    if (error) {
-      setPendingSplits((prev) => prev.filter((p) => p.id !== tempId))
-      delete inFlightRef.current[tempId]
-      return
+    const splitRow = {
+      id: crypto.randomUUID(),
+      race_id: race.id,
+      athlete_id: athlete.id,
+      checkpoint_id: activeCheckpoint.id,
+      label: athlete.name,
+      recorded_time_ms: time,
     }
 
-    if (flight?.cancelled) {
-      await supabase.from('splits').delete().eq('id', data.id)
-      setPendingSplits((prev) => prev.filter((p) => p.id !== tempId))
-      delete inFlightRef.current[tempId]
-      return
-    }
-
-    if (flight) flight.realId = data.id
+    setLocalPendingSplits((prev) => [...prev, splitRow])
+    enqueue(queueKey, { id: splitRow.id, action: 'insert', payload: splitRow })
+    setQueueCount(getQueued(queueKey).length)
+    flushQueueNow()
   }
 
-  async function undoLast() {
+  function undoLast() {
     if (finishedInOrder.length === 0) return
     const last = finishedInOrder[finishedInOrder.length - 1]
 
-    if (String(last.id).startsWith('pending-')) {
-      const flight = inFlightRef.current[last.id]
-      setPendingSplits((prev) => prev.filter((p) => p.id !== last.id))
-      if (flight?.realId) {
-        await supabase.from('splits').delete().eq('id', flight.realId)
-        delete inFlightRef.current[last.id]
-      } else if (flight) {
-        flight.cancelled = true
-      }
+    setLocalPendingSplits((prev) => prev.filter((p) => p.id !== last.id))
+
+    const stillQueuedAsInsert = getQueued(queueKey).some(
+      (q) => q.action === 'insert' && q.payload.id === last.id
+    )
+    if (stillQueuedAsInsert) {
+      // Never actually left the device yet - just cancel it, nothing to undo server-side
+      dequeue(queueKey, last.id)
     } else {
+      // Already sent (or sent before we can be sure) - hide it now and queue a delete
       setRemovedIds((prev) => new Set(prev).add(last.id))
-      const { error } = await supabase.from('splits').delete().eq('id', last.id)
-      if (error) {
-        setRemovedIds((prev) => {
-          const next = new Set(prev)
-          next.delete(last.id)
-          return next
-        })
-      }
+      enqueue(queueKey, { id: `delete-${last.id}`, action: 'delete', payload: { id: last.id } })
+      flushQueueNow()
     }
+    setQueueCount(getQueued(queueKey).length)
   }
 
   function checkpointCount(cp) {
@@ -879,6 +890,18 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
             </button>
           </div>
           <p className="text-xs text-gray-400 mb-2">Tap a name below as each runner reaches this point</p>
+
+          {queueCount > 0 && (
+            <div className="flex items-center justify-between bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mb-3 text-xs text-yellow-800">
+              <span>
+                {queueCount} tap{queueCount === 1 ? '' : 's'} waiting to sync — nothing is lost, will send
+                automatically once you have signal
+              </span>
+              <button onClick={flushQueueNow} className="underline whitespace-nowrap ml-2">
+                Retry now
+              </button>
+            </div>
+          )}
 
           <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6">
             {waiting.length === 0 ? (
