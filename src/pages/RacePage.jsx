@@ -616,7 +616,7 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
 
   useEffect(() => {
     if (!activeCheckpointId && sortedCheckpoints.length > 0) {
-      setActiveCheckpointId(sortedCheckpoints[sortedCheckpoints.length - 1].id)
+      setActiveCheckpointId(sortedCheckpoints[0].id)
     }
   }, [checkpoints.length])
 
@@ -832,10 +832,10 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
             <button
               key={cp.id}
               onClick={() => setActiveCheckpointId(cp.id)}
-              className={`whitespace-nowrap text-xs px-3 py-1.5 rounded-full border ${
+              className={`whitespace-nowrap text-sm font-semibold px-4 py-2 rounded-full border-2 ${
                 cp.id === activeCheckpointId
-                  ? 'bg-gray-900 text-white border-gray-900 font-medium'
-                  : 'border-gray-300 text-gray-500'
+                  ? 'bg-gray-900 text-white border-gray-900 shadow-md'
+                  : 'border-gray-300 text-gray-600'
               }`}
             >
               {cp.label} ({checkpointCount(cp)}/{raceAthletes.length})
@@ -846,14 +846,15 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
 
       {canRecord && (
         <>
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-medium text-gray-700">
-              Recording at: {activeCheckpoint?.label || '—'}
-            </h2>
+          <div className="bg-gray-900 text-white rounded-lg px-4 py-3 mb-3 flex items-center justify-between">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-gray-300">Recording at</div>
+              <div className="text-2xl font-bold leading-tight">{activeCheckpoint?.label || '—'}</div>
+            </div>
             <button
               onClick={undoLast}
               disabled={finishedInOrder.length === 0}
-              className="text-xs text-gray-500 underline disabled:opacity-40"
+              className="text-xs text-gray-300 underline disabled:opacity-40"
             >
               Undo
             </button>
