@@ -7,6 +7,7 @@ import RacePage from './pages/RacePage'
 import TeamRoster from './pages/TeamRoster'
 import JoinRace from './pages/JoinRace'
 import Team from './pages/Team'
+import AthleteHistory from './pages/AthleteHistory'
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -33,6 +34,7 @@ export default function App() {
       <Route path="/roster" element={session ? <TeamRoster session={session} /> : <Login />} />
       <Route path="/join" element={session ? <JoinRace session={session} /> : <Login />} />
       <Route path="/team" element={session ? <Team session={session} /> : <Login />} />
+      <Route path="/athlete/:teamAthleteId" element={session ? <AthleteHistory /> : <Login />} />
       <Route path="/race/:raceId" element={<RacePage session={session} />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
