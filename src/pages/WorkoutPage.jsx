@@ -7,6 +7,7 @@ import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
 export default function WorkoutPage({ session }) {
   const { workoutId } = useParams()
   const [workout, setWorkout] = useState(null)
+  const [team, setTeam] = useState(null)
   const [teamAthletes, setTeamAthletes] = useState([])
   const [workoutAthletes, setWorkoutAthletes] = useState([])
   const [reps, setReps] = useState([])
@@ -49,6 +50,18 @@ export default function WorkoutPage({ session }) {
   async function loadWorkout() {
     const { data } = await supabase.from('workouts').select('*').eq('id', workoutId).single()
     setWorkout(data)
+
+    if (data?.team_id) {
+      const { data: teamRow } = await supabase
+        .from('teams')
+        .select('id, name, photo_url')
+        .eq('id', data.team_id)
+        .maybeSingle()
+      setTeam(teamRow || null)
+    } else {
+      setTeam(null)
+    }
+
     if (data && data.coach_id === session?.user?.id) {
       let query = supabase.from('team_athletes').select('*').order('name', { ascending: true })
       query = data.team_id
@@ -102,6 +115,7 @@ export default function WorkoutPage({ session }) {
       {workout.status !== 'setup' && (
         <WorkoutLive
           workout={workout}
+          team={team}
           workoutAthletes={workoutAthletes}
           reps={reps}
           splits={splits}
@@ -228,10 +242,44 @@ function computeElapsed(repLike) {
   return base
 }
 
-function WorkoutLive({ workout, workoutAthletes, reps, splits, isOwner }) {
+function WorkoutLive({ workout, team, workoutAthletes, reps, splits, isOwner }) {
   const sortedReps = [...reps].sort((a, b) => a.rep_number - b.rep_number)
   const [activeRepId, setActiveRepId] = useState(null)
   const rafRef = useRef(null)
+  const printRef = useRef(null)
+
+  useEffect(() => {
+    function fitToPage() {
+      const el = printRef.current
+      if (!el) return
+      el.style.transform = 'none'
+      el.style.width = '100%'
+
+      const naturalHeight = el.scrollHeight
+      // Letter page in landscape (11 x 8.5in) minus 0.4in top+bottom margins, at the
+      // standard 96 CSS px/inch browsers use for print layout.
+      const availableHeightPx = (8.5 - 0.8) * 96
+
+      if (naturalHeight > availableHeightPx) {
+        const scale = availableHeightPx / naturalHeight
+        el.style.transform = `scale(${scale})`
+        el.style.transformOrigin = 'top left'
+        el.style.width = `${100 / scale}%`
+      }
+    }
+    function resetFit() {
+      const el = printRef.current
+      if (!el) return
+      el.style.transform = 'none'
+      el.style.width = '100%'
+    }
+    window.addEventListener('beforeprint', fitToPage)
+    window.addEventListener('afterprint', resetFit)
+    return () => {
+      window.removeEventListener('beforeprint', fitToPage)
+      window.removeEventListener('afterprint', resetFit)
+    }
+  }, [])
 
   useEffect(() => {
     if (sortedReps.length > 0 && (!activeRepId || !sortedReps.some((r) => r.id === activeRepId))) {
@@ -420,8 +468,15 @@ function WorkoutLive({ workout, workoutAthletes, reps, splits, isOwner }) {
 
   return (
     <div>
+      <style>{`
+        @media print {
+          @page { size: letter landscape; margin: 0.4in; }
+          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
+      `}</style>
+
       {sortedReps.length > 1 && (
-        <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
+        <div className="flex gap-2 overflow-x-auto mb-4 pb-1 print:hidden">
           {sortedReps.map((r) => (
             <button
               key={r.id}
@@ -439,12 +494,12 @@ function WorkoutLive({ workout, workoutAthletes, reps, splits, isOwner }) {
       {!activeRep ? (
         <button
           onClick={startNextRep}
-          className="w-full bg-gray-900 text-white rounded-lg py-3 text-sm font-medium mb-4"
+          className="w-full bg-gray-900 text-white rounded-lg py-3 text-sm font-medium mb-4 print:hidden"
         >
           Start Rep 1
         </button>
       ) : (
-        <>
+        <div className="print:hidden">
           <div className="text-center py-4">
             <div className="text-5xl font-semibold tabular-nums">{formatTime(elapsed)}</div>
           </div>
@@ -523,40 +578,78 @@ function WorkoutLive({ workout, workoutAthletes, reps, splits, isOwner }) {
               {hasMorePlannedReps ? `Start ${sortedReps[sortedReps.length - 1]?.label ? 'next rep' : 'Rep 1'}` : 'Add another rep'}
             </button>
           )}
-        </>
+        </div>
       )}
 
       {sortedReps.length > 0 && (
         <div>
-          <h2 className="text-sm font-medium text-gray-700 mb-2">All reps so far</h2>
-          <div className="overflow-x-auto">
-            <table className="text-sm border-collapse">
-              <thead>
-                <tr>
-                  <th className="text-left py-2 pr-4 sticky left-0 bg-white">Athlete</th>
-                  {sortedReps.map((r) => (
-                    <th key={r.id} className="text-right py-2 px-2 text-xs font-normal text-gray-400">
-                      {r.rep_number}
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-medium text-gray-700 print:hidden">All reps so far</h2>
+            <button onClick={() => window.print()} className="text-xs text-gray-500 underline print:hidden">
+              Print report
+            </button>
+          </div>
+
+          <div ref={printRef}>
+            {/* Print-only letterhead */}
+            <div className="hidden print:flex items-center gap-3 border-b-2 border-gray-900 pb-2 mb-3">
+              {team?.photo_url && <img src={team.photo_url} alt="" className="w-9 h-9 rounded object-cover" />}
+              <div>
+                <div className="text-base font-extrabold leading-tight">{team ? team.name : workout.name}</div>
+                <div className="text-xs text-gray-600">
+                  {team && <>{workout.name} · </>}
+                  {new Date(workout.created_at).toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                  })}
+                  {workout.rep_label && <> · {workout.rep_label}</>}
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto print:overflow-visible">
+              <table className="text-sm print:text-[8.5px] border-collapse w-full">
+                <thead>
+                  <tr>
+                    <th className="text-left py-2 print:py-1 pr-4 print:pr-2 sticky left-0 bg-white print:static">
+                      Athlete
                     </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {workoutAthletes.map((a) => (
-                  <tr key={a.id} className="border-t border-gray-100">
-                    <td className="py-2 pr-4 font-medium sticky left-0 bg-white">{a.name}</td>
-                    {sortedReps.map((r) => {
-                      const s = splits.find((sp) => sp.rep_id === r.id && sp.athlete_id === a.id)
-                      return (
-                        <td key={r.id} className="py-2 px-2 text-right tabular-nums">
-                          {s ? formatTime(s.recorded_time_ms) : '—'}
-                        </td>
-                      )
-                    })}
+                    {sortedReps.map((r) => (
+                      <th
+                        key={r.id}
+                        className="text-right py-2 print:py-1 px-2 print:px-1.5 text-xs print:text-[7.5px] font-normal text-gray-400 border-l border-gray-100 print:border-gray-200"
+                      >
+                        {r.rep_number}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {workoutAthletes.map((a, i) => (
+                    <tr
+                      key={a.id}
+                      className={`border-t border-gray-100 print:border-gray-200 ${i % 2 === 1 ? 'print:bg-gray-50' : ''}`}
+                    >
+                      <td className="py-2 print:py-0.5 pr-4 print:pr-2 font-medium sticky left-0 bg-white print:static print:bg-transparent">
+                        {a.name}
+                      </td>
+                      {sortedReps.map((r) => {
+                        const s = splits.find((sp) => sp.rep_id === r.id && sp.athlete_id === a.id)
+                        return (
+                          <td
+                            key={r.id}
+                            className="py-2 print:py-0.5 px-2 print:px-1.5 text-right tabular-nums border-l border-gray-100 print:border-gray-200"
+                          >
+                            {s ? formatTime(s.recorded_time_ms) : '—'}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
