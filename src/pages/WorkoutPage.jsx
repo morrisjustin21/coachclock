@@ -4,13 +4,15 @@ import { supabase } from '../supabaseClient'
 import { formatTime } from '../lib/csv'
 import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
 
+const CHECKPOINT_PRESETS = ['1000m', '2000m', '3000m', '4000m', '1mi', '2mi', '3mi', 'Finish']
+
 export default function WorkoutPage({ session }) {
   const { workoutId } = useParams()
   const [workout, setWorkout] = useState(null)
   const [team, setTeam] = useState(null)
   const [teamAthletes, setTeamAthletes] = useState([])
   const [workoutAthletes, setWorkoutAthletes] = useState([])
-  const [reps, setReps] = useState([])
+  const [reps, setReps] = useState([]) // used as either "reps" (intervals) or "checkpoints" (continuous)
   const [splits, setSplits] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -112,8 +114,19 @@ export default function WorkoutPage({ session }) {
         <WorkoutSetup workout={workout} teamAthletes={teamAthletes} onStarted={loadAll} />
       )}
 
-      {workout.status !== 'setup' && (
-        <WorkoutLive
+      {workout.status !== 'setup' && workout.mode === 'continuous' && (
+        <ContinuousWorkoutLive
+          workout={workout}
+          team={team}
+          workoutAthletes={workoutAthletes}
+          checkpoints={reps}
+          splits={splits}
+          isOwner={isOwner}
+        />
+      )}
+
+      {workout.status !== 'setup' && workout.mode !== 'continuous' && (
+        <IntervalWorkoutLive
           workout={workout}
           team={team}
           workoutAthletes={workoutAthletes}
@@ -131,6 +144,9 @@ function WorkoutSetup({ workout, teamAthletes, onStarted }) {
   const [oneOffName, setOneOffName] = useState('')
   const [oneOffs, setOneOffs] = useState([])
   const [starting, setStarting] = useState(false)
+
+  const [checkpointList, setCheckpointList] = useState([])
+  const [customCheckpoint, setCustomCheckpoint] = useState('')
 
   function toggle(id) {
     setSelected((prev) => {
@@ -153,20 +169,53 @@ function WorkoutSetup({ workout, teamAthletes, onStarted }) {
     setOneOffName('')
   }
 
+  function addPresetCheckpoint(e) {
+    const label = e.target.value
+    if (!label) return
+    setCheckpointList([...checkpointList, { key: `cp-${Date.now()}`, label }])
+    e.target.value = ''
+  }
+
+  function addCustomCheckpoint(e) {
+    e.preventDefault()
+    if (!customCheckpoint.trim()) return
+    setCheckpointList([...checkpointList, { key: `cp-${Date.now()}`, label: customCheckpoint.trim() }])
+    setCustomCheckpoint('')
+  }
+
+  function moveCheckpoint(index, dir) {
+    const next = [...checkpointList]
+    const target = index + dir
+    if (target < 0 || target >= next.length) return
+    ;[next[index], next[target]] = [next[target], next[index]]
+    setCheckpointList(next)
+  }
+
+  function removeCheckpoint(key) {
+    setCheckpointList(checkpointList.filter((c) => c.key !== key))
+  }
+
   async function startWorkout() {
     if (selected.size === 0 && oneOffs.length === 0) return
+    if (workout.mode === 'continuous' && checkpointList.length === 0) return
     setStarting(true)
 
-    const rows = [
+    const athleteRows = [
       ...teamAthletes
         .filter((a) => selected.has(a.id))
         .map((a) => ({ workout_id: workout.id, team_athlete_id: a.id, name: a.name, bib: a.bib })),
       ...oneOffs.map((o) => ({ workout_id: workout.id, team_athlete_id: null, name: o.name, bib: null })),
     ]
+    await supabase.from('workout_athletes').insert(athleteRows)
 
-    await supabase.from('workout_athletes').insert(rows)
-
-    if (workout.planned_reps && workout.planned_reps > 0) {
+    if (workout.mode === 'continuous') {
+      const checkpointRows = checkpointList.map((c, i) => ({
+        workout_id: workout.id,
+        rep_number: i + 1,
+        label: c.label,
+      }))
+      await supabase.from('workout_reps').insert(checkpointRows)
+    } else if (workout.planned_reps && workout.planned_reps > 0) {
       const repRows = Array.from({ length: workout.planned_reps }, (_, i) => ({
         workout_id: workout.id,
         rep_number: i + 1,
@@ -179,6 +228,9 @@ function WorkoutSetup({ workout, teamAthletes, onStarted }) {
     setStarting(false)
     onStarted()
   }
+
+  const canStart =
+    (selected.size > 0 || oneOffs.length > 0) && (workout.mode !== 'continuous' || checkpointList.length > 0)
 
   return (
     <div>
@@ -203,7 +255,7 @@ function WorkoutSetup({ workout, teamAthletes, onStarted }) {
         </div>
       )}
 
-      <form onSubmit={addOneOff} className="flex gap-2 mb-4">
+      <form onSubmit={addOneOff} className="flex gap-2 mb-6">
         <input
           type="text"
           placeholder="Add someone not on your roster"
@@ -215,16 +267,73 @@ function WorkoutSetup({ workout, teamAthletes, onStarted }) {
       </form>
 
       {oneOffs.length > 0 && (
-        <ul className="text-sm text-gray-600 mb-4 space-y-1">
+        <ul className="text-sm text-gray-600 mb-6 space-y-1">
           {oneOffs.map((o) => (
             <li key={o.key}>{o.name}</li>
           ))}
         </ul>
       )}
 
+      {workout.mode === 'continuous' && (
+        <>
+          <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>
+          <p className="text-xs text-gray-500 mb-2">Add each spot on the course you'll record a split, in order.</p>
+          <div className="flex gap-2 mb-3">
+            <select
+              onChange={addPresetCheckpoint}
+              defaultValue=""
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+              <option value="" disabled>
+                Add a common checkpoint...
+              </option>
+              {CHECKPOINT_PRESETS.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
+          <form onSubmit={addCustomCheckpoint} className="flex gap-2 mb-3">
+            <input
+              type="text"
+              placeholder="Or type a custom checkpoint name"
+              value={customCheckpoint}
+              onChange={(e) => setCustomCheckpoint(e.target.value)}
+              className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            />
+            <button className="border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium">Add</button>
+          </form>
+
+          {checkpointList.length > 0 && (
+            <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6">
+              {checkpointList.map((c, i) => (
+                <li key={c.key} className="flex items-center gap-2 px-3 py-2 text-sm">
+                  <span className="text-gray-400 w-5">{i + 1}</span>
+                  <span className="flex-1">{c.label}</span>
+                  <button onClick={() => moveCheckpoint(i, -1)} disabled={i === 0} className="text-gray-400 disabled:opacity-30 px-1">
+                    ↑
+                  </button>
+                  <button
+                    onClick={() => moveCheckpoint(i, 1)}
+                    disabled={i === checkpointList.length - 1}
+                    className="text-gray-400 disabled:opacity-30 px-1"
+                  >
+                    ↓
+                  </button>
+                  <button onClick={() => removeCheckpoint(c.key)} className="text-gray-400 hover:text-red-600 px-1">
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+
       <button
         onClick={startWorkout}
-        disabled={(selected.size === 0 && oneOffs.length === 0) || starting}
+        disabled={!canStart || starting}
         className="w-full bg-gray-900 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-40"
       >
         {starting ? 'Starting...' : 'Start workout'}
@@ -233,16 +342,16 @@ function WorkoutSetup({ workout, teamAthletes, onStarted }) {
   )
 }
 
-function computeElapsed(repLike) {
-  if (!repLike) return 0
-  const base = repLike.accumulated_ms || 0
-  if (repLike.running && repLike.started_at) {
-    return base + (Date.now() - new Date(repLike.started_at).getTime())
+function computeElapsed(clockLike) {
+  if (!clockLike) return 0
+  const base = clockLike.accumulated_ms || 0
+  if (clockLike.running && clockLike.started_at) {
+    return base + (Date.now() - new Date(clockLike.started_at).getTime())
   }
   return base
 }
 
-function WorkoutLive({ workout, team, workoutAthletes, reps, splits, isOwner }) {
+function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isOwner }) {
   const sortedReps = [...reps].sort((a, b) => a.rep_number - b.rep_number)
   const [activeRepId, setActiveRepId] = useState(null)
   const rafRef = useRef(null)
@@ -254,12 +363,8 @@ function WorkoutLive({ workout, team, workoutAthletes, reps, splits, isOwner }) 
       if (!el) return
       el.style.transform = 'none'
       el.style.width = '100%'
-
       const naturalHeight = el.scrollHeight
-      // Letter page in landscape (11 x 8.5in) minus 0.4in top+bottom margins, at the
-      // standard 96 CSS px/inch browsers use for print layout.
       const availableHeightPx = (8.5 - 0.8) * 96
-
       if (naturalHeight > availableHeightPx) {
         const scale = availableHeightPx / naturalHeight
         el.style.transform = `scale(${scale})`
@@ -575,7 +680,7 @@ function WorkoutLive({ workout, team, workoutAthletes, reps, splits, isOwner }) 
 
           {isOwner && (!workout.planned_reps || hasMorePlannedReps || isLastPlannedRep) && (
             <button onClick={startNextRep} className="w-full border border-gray-300 rounded-lg py-2 text-sm font-medium mb-6">
-              {hasMorePlannedReps ? `Start ${sortedReps[sortedReps.length - 1]?.label ? 'next rep' : 'Rep 1'}` : 'Add another rep'}
+              {hasMorePlannedReps ? `Start next rep` : 'Add another rep'}
             </button>
           )}
         </div>
@@ -591,7 +696,6 @@ function WorkoutLive({ workout, team, workoutAthletes, reps, splits, isOwner }) 
           </div>
 
           <div ref={printRef}>
-            {/* Print-only letterhead */}
             <div className="hidden print:flex items-center gap-3 border-b-2 border-gray-900 pb-2 mb-3">
               {team?.photo_url && <img src={team.photo_url} alt="" className="w-9 h-9 rounded object-cover" />}
               <div>
@@ -653,6 +757,448 @@ function WorkoutLive({ workout, team, workoutAthletes, reps, splits, isOwner }) 
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function buildContinuousReportRows(checkpoints, workoutAthletes, splits) {
+  const sortedCheckpoints = [...checkpoints].sort((a, b) => a.rep_number - b.rep_number)
+  const byAthlete = {}
+  splits.forEach((s) => {
+    if (!byAthlete[s.athlete_id]) byAthlete[s.athlete_id] = {}
+    byAthlete[s.athlete_id][s.rep_id] = s
+  })
+
+  const rows = workoutAthletes.map((athlete) => {
+    const times = byAthlete[athlete.id] || {}
+    let prevCumulative = 0
+    const cells = sortedCheckpoints.map((cp) => {
+      const split = times[cp.id]
+      const cumulative = split ? split.recorded_time_ms : null
+      const segment = cumulative != null ? cumulative - prevCumulative : null
+      if (cumulative != null) prevCumulative = cumulative
+      return { checkpointId: cp.id, label: cp.label, cumulative, segment }
+    })
+    return { athlete, cells }
+  })
+
+  const lastCp = sortedCheckpoints[sortedCheckpoints.length - 1]
+  rows.sort((a, b) => {
+    const aLast = lastCp ? a.cells.find((c) => c.checkpointId === lastCp.id)?.cumulative : null
+    const bLast = lastCp ? b.cells.find((c) => c.checkpointId === lastCp.id)?.cumulative : null
+    if (aLast != null && bLast != null) return aLast - bLast
+    if (aLast != null) return -1
+    if (bLast != null) return 1
+    return 0
+  })
+
+  return { sortedCheckpoints, rows }
+}
+
+function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, splits, isOwner }) {
+  const sortedCheckpoints = [...checkpoints].sort((a, b) => a.rep_number - b.rep_number)
+  const [activeCheckpointId, setActiveCheckpointId] = useState(null)
+  const [showReport, setShowReport] = useState(false)
+  const rafRef = useRef(null)
+  const printRef = useRef(null)
+
+  useEffect(() => {
+    if (!activeCheckpointId && sortedCheckpoints.length > 0) {
+      setActiveCheckpointId(sortedCheckpoints[0].id)
+    }
+  }, [checkpoints.length])
+
+  const [localWorkout, setLocalWorkout] = useState(workout)
+  const [elapsed, setElapsed] = useState(computeElapsed(workout))
+
+  useEffect(() => {
+    setLocalWorkout(workout)
+  }, [workout.running, workout.started_at, workout.accumulated_ms])
+
+  useEffect(() => {
+    cancelAnimationFrame(rafRef.current)
+    setElapsed(computeElapsed(localWorkout))
+    if (localWorkout.running) {
+      function loop() {
+        setElapsed(computeElapsed(localWorkout))
+        rafRef.current = requestAnimationFrame(loop)
+      }
+      rafRef.current = requestAnimationFrame(loop)
+    }
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [localWorkout.running, localWorkout.started_at, localWorkout.accumulated_ms])
+
+  useEffect(() => {
+    function fitToPage() {
+      const el = printRef.current
+      if (!el) return
+      el.style.transform = 'none'
+      el.style.width = '100%'
+      const naturalHeight = el.scrollHeight
+      const availableHeightPx = (11 - 0.8) * 96
+      if (naturalHeight > availableHeightPx) {
+        const scale = availableHeightPx / naturalHeight
+        el.style.transform = `scale(${scale})`
+        el.style.transformOrigin = 'top left'
+        el.style.width = `${100 / scale}%`
+      }
+    }
+    function resetFit() {
+      const el = printRef.current
+      if (!el) return
+      el.style.transform = 'none'
+      el.style.width = '100%'
+    }
+    window.addEventListener('beforeprint', fitToPage)
+    window.addEventListener('afterprint', resetFit)
+    return () => {
+      window.removeEventListener('beforeprint', fitToPage)
+      window.removeEventListener('afterprint', resetFit)
+    }
+  }, [showReport])
+
+  const [pendingSplits, setPendingSplits] = useState([])
+  const [removedIds, setRemovedIds] = useState(new Set())
+
+  const queueKey = `workout-continuous-${workout.id}`
+  const [queueCount, setQueueCount] = useState(() => getQueued(queueKey).length)
+
+  useEffect(() => {
+    setPendingSplits(getQueued(queueKey).map((q) => q.payload))
+    flushQueueNow()
+  }, [])
+
+  useEffect(() => {
+    const confirmedIds = new Set(splits.map((s) => s.id))
+    setPendingSplits((prev) => prev.filter((p) => !confirmedIds.has(p.id)))
+  }, [splits])
+
+  useEffect(() => {
+    const interval = setInterval(flushQueueNow, 8000)
+    window.addEventListener('online', flushQueueNow)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('online', flushQueueNow)
+    }
+  }, [])
+
+  async function flushQueueNow() {
+    const items = getQueued(queueKey)
+    for (const item of items) {
+      try {
+        let ok = false
+        if (item.action === 'insert') {
+          const { error } = await supabase
+            .from('workout_splits')
+            .upsert(item.payload, { onConflict: 'id', ignoreDuplicates: true })
+          ok = !error
+        } else if (item.action === 'delete') {
+          const { error } = await supabase.from('workout_splits').delete().eq('id', item.payload.id)
+          ok = !error
+        }
+        if (ok) dequeue(queueKey, item.id)
+      } catch {
+        // still offline - next flush will retry
+      }
+    }
+    setQueueCount(getQueued(queueKey).length)
+  }
+
+  async function handleStartStop() {
+    if (!localWorkout.running) {
+      const started_at = new Date().toISOString()
+      setLocalWorkout((prev) => ({ ...prev, running: true, started_at }))
+      await supabase.from('workouts').update({ running: true, started_at }).eq('id', workout.id)
+    } else {
+      const elapsedNow = computeElapsed(localWorkout)
+      setLocalWorkout((prev) => ({ ...prev, running: false, started_at: null, accumulated_ms: elapsedNow }))
+      await supabase
+        .from('workouts')
+        .update({ running: false, started_at: null, accumulated_ms: elapsedNow })
+        .eq('id', workout.id)
+    }
+  }
+
+  async function resetWorkout() {
+    const confirmed = window.confirm(
+      'Reset this workout? This clears the clock and deletes every recorded time at every checkpoint. This cannot be undone.'
+    )
+    if (!confirmed) return
+    setLocalWorkout((prev) => ({ ...prev, running: false, started_at: null, accumulated_ms: 0 }))
+    setPendingSplits([])
+    setRemovedIds(new Set())
+    clearQueue(queueKey)
+    setQueueCount(0)
+    await supabase.from('workouts').update({ running: false, started_at: null, accumulated_ms: 0 }).eq('id', workout.id)
+    await supabase.from('workout_splits').delete().eq('workout_id', workout.id)
+  }
+
+  async function finishWorkout() {
+    const confirmed = window.confirm('Finish this workout? Times stay saved, but can no longer be recorded.')
+    if (!confirmed) return
+    await supabase.from('workouts').update({ status: 'finished' }).eq('id', workout.id)
+  }
+
+  const activeCheckpoint = sortedCheckpoints.find((c) => c.id === activeCheckpointId)
+  const activeIndex = sortedCheckpoints.findIndex((c) => c.id === activeCheckpointId)
+  const prevCheckpoint = activeIndex > 0 ? sortedCheckpoints[activeIndex - 1] : null
+
+  const splitsForActive = splits.filter((s) => s.rep_id === activeCheckpointId)
+  const confirmedAthleteIds = new Set(splitsForActive.map((s) => s.athlete_id))
+  const visibleConfirmed = splitsForActive.filter((s) => !removedIds.has(s.id))
+  const visiblePending = pendingSplits.filter(
+    (p) => p.rep_id === activeCheckpointId && !confirmedAthleteIds.has(p.athlete_id)
+  )
+  const finishedInOrder = [...visibleConfirmed, ...visiblePending].sort(
+    (a, b) => a.recorded_time_ms - b.recorded_time_ms
+  )
+  const finishedAthleteIds = new Set(finishedInOrder.map((s) => s.athlete_id))
+
+  let waiting = workoutAthletes.filter((a) => !finishedAthleteIds.has(a.id))
+  if (prevCheckpoint) {
+    const prevTimes = {}
+    splits
+      .filter((s) => s.rep_id === prevCheckpoint.id)
+      .forEach((s) => {
+        prevTimes[s.athlete_id] = s.recorded_time_ms
+      })
+    waiting = [...waiting].sort((a, b) => {
+      const aHas = prevTimes[a.id] != null
+      const bHas = prevTimes[b.id] != null
+      if (aHas && bHas) return prevTimes[a.id] - prevTimes[b.id]
+      if (aHas) return -1
+      if (bHas) return 1
+      return 0
+    })
+  }
+
+  function recordFinish(athlete) {
+    if (!localWorkout.running || !activeCheckpoint) return
+    const time = computeElapsed(localWorkout)
+    const splitRow = {
+      id: crypto.randomUUID(),
+      workout_id: workout.id,
+      rep_id: activeCheckpoint.id,
+      athlete_id: athlete.id,
+      label: athlete.name,
+      recorded_time_ms: time,
+    }
+    setPendingSplits((prev) => [...prev, splitRow])
+    enqueue(queueKey, { id: splitRow.id, action: 'insert', payload: splitRow })
+    setQueueCount(getQueued(queueKey).length)
+    flushQueueNow()
+  }
+
+  function undoLast() {
+    if (finishedInOrder.length === 0) return
+    const last = finishedInOrder[finishedInOrder.length - 1]
+    setPendingSplits((prev) => prev.filter((p) => p.id !== last.id))
+
+    const stillQueuedAsInsert = getQueued(queueKey).some((q) => q.action === 'insert' && q.payload.id === last.id)
+    if (stillQueuedAsInsert) {
+      dequeue(queueKey, last.id)
+    } else {
+      setRemovedIds((prev) => new Set(prev).add(last.id))
+      enqueue(queueKey, { id: `delete-${last.id}`, action: 'delete', payload: { id: last.id } })
+      flushQueueNow()
+    }
+    setQueueCount(getQueued(queueKey).length)
+  }
+
+  function checkpointCount(cp) {
+    return splits.filter((s) => s.rep_id === cp.id).length
+  }
+
+  if (showReport) {
+    const { sortedCheckpoints: reportCheckpoints, rows } = buildContinuousReportRows(checkpoints, workoutAthletes, splits)
+    return (
+      <div>
+        <style>{`
+          @media print {
+            @page { size: letter portrait; margin: 0.4in; }
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          }
+        `}</style>
+        <button onClick={() => setShowReport(false)} className="text-sm text-gray-500 underline mb-4 print:hidden">
+          &larr; Back to workout
+        </button>
+        <div className="flex items-center justify-between mb-4 print:hidden">
+          <h2 className="text-lg font-semibold">Full report</h2>
+          <button onClick={() => window.print()} className="text-xs text-gray-500 underline">
+            Print
+          </button>
+        </div>
+
+        <div ref={printRef}>
+          <div className="hidden print:flex items-center gap-3 border-b-2 border-gray-900 pb-2 mb-3">
+            {team?.photo_url && <img src={team.photo_url} alt="" className="w-9 h-9 rounded object-cover" />}
+            <div>
+              <div className="text-base font-extrabold leading-tight">{team ? team.name : workout.name}</div>
+              <div className="text-xs text-gray-600">
+                {team && <>{workout.name} · </>}
+                {new Date(workout.created_at).toLocaleDateString(undefined, {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto print:overflow-visible">
+            <table className="text-sm print:text-[7.5px] border-collapse w-full">
+              <thead>
+                <tr>
+                  <th className="text-left py-2 print:py-1 pr-4 print:pr-2 sticky left-0 bg-white print:static">#</th>
+                  <th className="text-left py-2 print:py-1 pr-4 print:pr-2 sticky left-0 bg-white print:static">Runner</th>
+                  {reportCheckpoints.map((cp) => (
+                    <th
+                      key={cp.id}
+                      colSpan={2}
+                      className="text-center py-2 print:py-1 px-2 print:px-1 border-l border-gray-200 uppercase print:tracking-wide text-gray-500 print:text-[6.5px] font-semibold"
+                    >
+                      {cp.label}
+                    </th>
+                  ))}
+                </tr>
+                <tr>
+                  <th className="sticky left-0 bg-white print:static"></th>
+                  <th className="sticky left-0 bg-white print:static"></th>
+                  {reportCheckpoints.map((cp) => (
+                    <>
+                      <th key={`${cp.id}-time`} className="text-xs print:text-[6.5px] font-normal text-gray-400 px-2 print:px-1 border-l border-gray-200">
+                        Time
+                      </th>
+                      <th key={`${cp.id}-split`} className="text-xs print:text-[6.5px] font-normal text-gray-400 px-2 print:px-1">
+                        Split
+                      </th>
+                    </>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(({ athlete, cells }, i) => (
+                  <tr key={athlete.id} className={`border-t border-gray-100 print:border-gray-200 ${i % 2 === 1 ? 'print:bg-gray-50' : ''}`}>
+                    <td className="py-2 print:py-0.5 pr-4 print:pr-2 text-gray-400 sticky left-0 bg-white print:static print:bg-transparent">
+                      {i + 1}
+                    </td>
+                    <td className="py-2 print:py-0.5 pr-4 print:pr-2 font-medium sticky left-0 bg-white print:static print:bg-transparent">
+                      {athlete.name}
+                    </td>
+                    {cells.map((c) => (
+                      <>
+                        <td key={`${c.checkpointId}-time`} className="text-right tabular-nums px-2 print:px-1 border-l border-gray-100 print:border-gray-200">
+                          {formatTime(c.cumulative)}
+                        </td>
+                        <td key={`${c.checkpointId}-split`} className="text-right tabular-nums px-2 print:px-1 text-gray-500">
+                          {formatTime(c.segment)}
+                        </td>
+                      </>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div className="text-center py-4">
+        <div className="text-5xl font-semibold tabular-nums">{formatTime(elapsed)}</div>
+      </div>
+
+      {isOwner && (
+        <div className="flex gap-2 justify-center mb-4">
+          <button onClick={handleStartStop} className="min-w-[100px] border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium">
+            {localWorkout.running ? 'Stop' : elapsed > 0 ? 'Resume' : 'Start'}
+          </button>
+          <button onClick={resetWorkout} className="border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm font-medium">
+            Reset
+          </button>
+          <button onClick={finishWorkout} className="border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium">
+            Finish
+          </button>
+        </div>
+      )}
+
+      {sortedCheckpoints.length > 1 && (
+        <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
+          {sortedCheckpoints.map((cp) => (
+            <button
+              key={cp.id}
+              onClick={() => setActiveCheckpointId(cp.id)}
+              className={`whitespace-nowrap text-sm font-semibold px-4 py-2 rounded-full border-2 ${
+                cp.id === activeCheckpointId ? 'bg-gray-900 text-white border-gray-900 shadow-md' : 'border-gray-300 text-gray-600'
+              }`}
+            >
+              {cp.label} ({checkpointCount(cp)}/{workoutAthletes.length})
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="bg-gray-900 text-white rounded-lg px-4 py-3 mb-3 flex items-center justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-wide text-gray-300">Recording at</div>
+          <div className="text-2xl font-bold leading-tight">{activeCheckpoint?.label || '—'}</div>
+        </div>
+        <button
+          onClick={undoLast}
+          disabled={finishedInOrder.length === 0}
+          className="text-xs text-gray-300 underline disabled:opacity-40"
+        >
+          Undo
+        </button>
+      </div>
+
+      {queueCount > 0 && (
+        <div className="flex items-center justify-between bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mb-3 text-xs text-yellow-800">
+          <span>{queueCount} tap{queueCount === 1 ? '' : 's'} waiting to sync</span>
+          <button onClick={flushQueueNow} className="underline whitespace-nowrap ml-2">
+            Retry now
+          </button>
+        </div>
+      )}
+
+      <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-4">
+        {waiting.length === 0 ? (
+          <li className="px-3 py-3 text-sm text-gray-400">Everyone has come through.</li>
+        ) : (
+          waiting.map((a) => (
+            <li key={a.id}>
+              <button
+                onClick={() => recordFinish(a)}
+                disabled={!localWorkout.running}
+                className="w-full text-left px-3 py-3 text-sm hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+              >
+                {a.name}
+              </button>
+            </li>
+          ))
+        )}
+      </ul>
+
+      {finishedInOrder.length > 0 && (
+        <table className="w-full text-sm mb-4">
+          <tbody>
+            {finishedInOrder.map((s, i) => (
+              <tr key={s.id} className="border-b border-gray-100">
+                <td className="py-2 text-gray-400 w-8">{i + 1}</td>
+                <td className="py-2">{s.label}</td>
+                <td className="py-2 text-right tabular-nums font-medium">{formatTime(s.recorded_time_ms)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <button onClick={() => setShowReport(true)} className="w-full border border-gray-300 rounded-lg py-2 text-sm font-medium">
+        View full report (splits + times)
+      </button>
     </div>
   )
 }
