@@ -25,6 +25,7 @@ export default function RacePage({ session }) {
   const [isParticipant, setIsParticipant] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showReport, setShowReport] = useState(false)
+  const [showCheckin, setShowCheckin] = useState(false)
 
   const isOwner = session && race && race.coach_id === session.user.id
   const canRecord = isOwner || isParticipant
@@ -154,32 +155,47 @@ export default function RacePage({ session }) {
       )}
       <h1 className="text-xl font-semibold mt-2 mb-1">{race.name}</h1>
 
-      {isOwner && race.status === 'setup' && (
-        <RaceSetup race={race} teamAthletes={teamAthletes} onStarted={loadAll} session={session} />
+      {canRecord && race.status !== 'setup' && (
+        <button
+          onClick={() => setShowCheckin((v) => !v)}
+          className="text-xs text-gray-500 underline mb-4"
+        >
+          {showCheckin ? '← Back to race' : 'Check-in sheet'}
+        </button>
       )}
 
-      {race.status !== 'setup' && !showReport && (
-        <RaceLive
-          race={race}
-          raceAthletes={raceAthletes}
-          checkpoints={checkpoints}
-          splits={splits}
-          isOwner={isOwner}
-          canRecord={canRecord}
-          session={session}
-          onViewReport={() => setShowReport(true)}
-        />
-      )}
+      {showCheckin && canRecord && race.status !== 'setup' ? (
+        <RaceCheckin raceAthletes={raceAthletes} />
+      ) : (
+        <>
+          {isOwner && race.status === 'setup' && (
+            <RaceSetup race={race} teamAthletes={teamAthletes} onStarted={loadAll} session={session} />
+          )}
 
-      {race.status !== 'setup' && showReport && (
-        <RaceReport
-          race={race}
-          team={team}
-          raceAthletes={raceAthletes}
-          checkpoints={checkpoints}
-          splits={splits}
-          onBack={() => setShowReport(false)}
-        />
+          {race.status !== 'setup' && !showReport && (
+            <RaceLive
+              race={race}
+              raceAthletes={raceAthletes}
+              checkpoints={checkpoints}
+              splits={splits}
+              isOwner={isOwner}
+              canRecord={canRecord}
+              session={session}
+              onViewReport={() => setShowReport(true)}
+            />
+          )}
+
+          {race.status !== 'setup' && showReport && (
+            <RaceReport
+              race={race}
+              team={team}
+              raceAthletes={raceAthletes}
+              checkpoints={checkpoints}
+              splits={splits}
+              onBack={() => setShowReport(false)}
+            />
+          )}
+        </>
       )}
     </div>
   )
@@ -1204,6 +1220,86 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
           </table>
         </div>
       </div>
+    </div>
+  )
+}
+
+function checkinState(a) {
+  if (a.checked_out_at) return 'out'
+  if (a.checked_in_at) return 'in'
+  return 'none'
+}
+
+function RaceCheckin({ raceAthletes }) {
+  const [rows, setRows] = useState(raceAthletes)
+
+  useEffect(() => {
+    setRows(raceAthletes)
+  }, [raceAthletes])
+
+  const inCount = rows.filter((a) => checkinState(a) === 'in').length
+  const outCount = rows.filter((a) => checkinState(a) === 'out').length
+  const noneCount = rows.length - inCount - outCount
+
+  async function cycle(athlete) {
+    const state = checkinState(athlete)
+    const now = new Date().toISOString()
+    let update
+
+    if (state === 'none') {
+      update = { checked_in_at: now, checked_out_at: null }
+    } else if (state === 'in') {
+      update = { checked_out_at: now }
+    } else {
+      update = { checked_in_at: null, checked_out_at: null }
+    }
+
+    setRows((prev) => prev.map((a) => (a.id === athlete.id ? { ...a, ...update } : a)))
+    await supabase.from('athletes').update(update).eq('id', athlete.id)
+  }
+
+  return (
+    <div>
+      <h2 className="text-lg font-semibold mb-1">Check-in sheet</h2>
+      <p className="text-sm text-gray-500 mb-4">
+        Tap a name to cycle: not here → checked in → checked out. Tap again to reset.
+      </p>
+
+      <div className="flex gap-4 text-sm mb-4">
+        <span className="text-gray-500">
+          <span className="font-semibold text-gray-900">{inCount}</span> in
+        </span>
+        <span className="text-gray-500">
+          <span className="font-semibold text-gray-900">{outCount}</span> out
+        </span>
+        <span className="text-gray-500">
+          <span className="font-semibold text-gray-900">{noneCount}</span> not yet
+        </span>
+      </div>
+
+      <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100">
+        {rows.map((a) => {
+          const state = checkinState(a)
+          return (
+            <li key={a.id}>
+              <button onClick={() => cycle(a)} className="w-full flex items-center justify-between px-3 py-3 text-sm hover:bg-gray-50">
+                <span>{a.name}</span>
+                {state === 'none' && <span className="text-xs text-gray-400">Not here</span>}
+                {state === 'in' && (
+                  <span className="text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+                    In {new Date(a.checked_in_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  </span>
+                )}
+                {state === 'out' && (
+                  <span className="text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5">
+                    Out {new Date(a.checked_out_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  </span>
+                )}
+              </button>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }
