@@ -36,12 +36,26 @@ export default function Workouts({ session }) {
       setTeams(teamRows || [])
     }
 
-    const { data } = await supabase
+    const { data: ownWorkouts } = await supabase
       .from('workouts')
       .select('*')
       .eq('coach_id', session.user.id)
       .order('created_at', { ascending: false })
-    setWorkouts(data || [])
+
+    let combined = ownWorkouts || []
+
+    if (teamIds.length > 0) {
+      const { data: teamWorkouts } = await supabase
+        .from('workouts')
+        .select('*')
+        .in('team_id', teamIds)
+        .order('created_at', { ascending: false })
+      const existingIds = new Set(combined.map((w) => w.id))
+      combined = [...combined, ...(teamWorkouts || []).filter((w) => !existingIds.has(w.id))]
+      combined.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    }
+
+    setWorkouts(combined)
     setLoading(false)
   }
 
@@ -183,9 +197,14 @@ export default function Workouts({ session }) {
           {workouts.map((w) => (
             <li key={w.id} className="flex items-center gap-2 border border-gray-200 rounded-lg px-4 py-3">
               <Link to={`/workout/${w.id}`} className="flex-1 hover:opacity-70">
-                <div className="font-medium text-sm">
+                <div className="font-medium text-sm flex items-center gap-2">
                   {w.name}
                   {w.rep_label && <span className="text-gray-400 font-normal"> · {w.rep_label}</span>}
+                  {w.team_id && (
+                    <span className="text-[10px] uppercase tracking-wide text-gray-400 border border-gray-200 rounded-full px-1.5 py-0.5">
+                      {teams.find((t) => t.id === w.team_id)?.name || 'Team'}
+                    </span>
+                  )}
                 </div>
                 <div className="text-xs text-gray-500">
                   {new Date(w.created_at).toLocaleDateString()} · {w.status} ·{' '}
@@ -196,13 +215,15 @@ export default function Workouts({ session }) {
                     : 'freeform reps'}
                 </div>
               </Link>
-              <button
-                onClick={() => deleteWorkout(w)}
-                className="text-gray-400 hover:text-red-600 text-sm px-2"
-                aria-label={`Delete ${w.name}`}
-              >
-                ✕
-              </button>
+              {w.coach_id === session.user.id && (
+                <button
+                  onClick={() => deleteWorkout(w)}
+                  className="text-gray-400 hover:text-red-600 text-sm px-2"
+                  aria-label={`Delete ${w.name}`}
+                >
+                  ✕
+                </button>
+              )}
             </li>
           ))}
         </ul>
