@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { formatTime, downloadCSV } from '../lib/csv'
+import ExcelJS from 'exceljs'
 import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
 import {
@@ -1237,7 +1238,8 @@ function downloadSplitSheetCSV(race, columns, groups) {
     group.rows.all.forEach(({ athlete, segments, totalMs, refs }) => {
       const cells = columns.map((col) => {
         const v = cellForColumn(col, segments)
-        return v == null ? '' : formatTime(v)
+        if (v == null) return ''
+        return col.kind === 'diff' ? fmtDiff(v).text : formatTime(v)
       })
       const diffPR = refs.pr != null && totalMs != null ? totalMs - refs.pr : null
       const diffSB = refs.sb != null && totalMs != null ? totalMs - refs.sb : null
@@ -1271,6 +1273,173 @@ function downloadSplitSheetCSV(race, columns, groups) {
   const a = document.createElement('a')
   a.href = url
   a.download = `${race.name} - split sheet.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// Real formatted .xlsx export - colored diffs, PR highlight, bold headers/averages,
+// laid out to match the look of the split sheet you use today. Times are written as
+// text (e.g. "19:23") rather than live Excel time values, so they display exactly like
+// the report but aren't summable with Excel's own time math the way your original
+// sheet's cells were.
+const XLSX_FILL_GREEN = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD7F5DA' } }
+const XLSX_FILL_RED = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBE3E1' } }
+const XLSX_FILL_PR = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3B0' } }
+const XLSX_FILL_DARK = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1A1A1A' } }
+const XLSX_FILL_SUBHEAD = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E5E5' } }
+const XLSX_FILL_SUMMARY = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4F4F4' } }
+const XLSX_THIN_BORDER = { style: 'thin', color: { argb: 'FFBFBFBF' } }
+
+function signedTime(ms) {
+  if (ms === 0) return formatTime(0)
+  return (ms < 0 ? '-' : '+') + formatTime(Math.abs(ms))
+}
+
+function xlsxDiffStyle(ms) {
+  if (ms == null) return {}
+  if (ms === 0) return { font: { color: { argb: 'FF888888' } } }
+  return ms < 0
+    ? { fill: XLSX_FILL_GREEN, font: { color: { argb: 'FF0A7D2C' }, bold: true } }
+    : { fill: XLSX_FILL_RED, font: { color: { argb: 'FFB3261E' }, bold: true } }
+}
+
+async function downloadSplitSheetXLSX(race, team, columns, groups) {
+  const wb = new ExcelJS.Workbook()
+  const totalCols = 1 + columns.length + 1 + 6 // Name + checkpoint cols + Total + PR/SB/Prev (2 each)
+  const ws = wb.addWorksheet('Split Sheet', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0, footer: 0 } },
+  })
+
+  ws.getColumn(1).width = 20
+  for (let c = 2; c <= totalCols; c++) ws.getColumn(c).width = 10
+
+  const border = { top: XLSX_THIN_BORDER, bottom: XLSX_THIN_BORDER, left: XLSX_THIN_BORDER, right: XLSX_THIN_BORDER }
+  const setCell = (row, col, value, style = {}) => {
+    const cell = ws.getCell(row, col)
+    cell.value = value
+    cell.border = border
+    cell.alignment = { vertical: 'middle', horizontal: style.align || 'center', ...style.alignment }
+    if (style.fill) cell.fill = style.fill
+    if (style.font) cell.font = style.font
+    return cell
+  }
+
+  // Letterhead
+  ws.mergeCells(1, 1, 1, totalCols)
+  setCell(1, 1, team ? team.name : race.name, { align: 'left', font: { bold: true, size: 14 } })
+  ws.mergeCells(2, 1, 2, totalCols)
+  const dateStr = new Date(race.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
+  setCell(2, 1, `Split Sheet Report${team ? ` · ${race.name}` : ''} · ${dateStr}`, { align: 'left', font: { color: { argb: 'FF666666' } } })
+
+  let row = 4
+
+  groups.forEach((group) => {
+    // Group label
+    ws.mergeCells(row, 1, row, totalCols)
+    setCell(row, 1, group.label.toUpperCase(), { align: 'left', fill: XLSX_FILL_DARK, font: { bold: true, color: { argb: 'FFFFFFFF' } } })
+    row++
+
+    const headerRow1 = row
+    const headerRow2 = row + 1
+
+    // Name (vertical merge across both header rows)
+    ws.mergeCells(headerRow1, 1, headerRow2, 1)
+    setCell(headerRow1, 1, 'Name', { fill: XLSX_FILL_SUBHEAD, font: { bold: true } })
+
+    // Checkpoint column groups
+    let col = 2
+    let i = 0
+    while (i < columns.length) {
+      const label = columns[i].groupLabel
+      let span = 1
+      while (i + span < columns.length && columns[i + span].i === columns[i].i) span++
+      if (span > 1) ws.mergeCells(headerRow1, col, headerRow1, col + span - 1)
+      setCell(headerRow1, col, label, { fill: XLSX_FILL_SUBHEAD, font: { bold: true } })
+      for (let k = 0; k < span; k++) {
+        setCell(headerRow2, col + k, columns[i + k].sub, { fill: XLSX_FILL_SUBHEAD, font: { size: 9, color: { argb: 'FF666666' } } })
+      }
+      col += span
+      i += span
+    }
+
+    // Total (vertical merge)
+    ws.mergeCells(headerRow1, col, headerRow2, col)
+    setCell(headerRow1, col, 'Total', { fill: XLSX_FILL_SUBHEAD, font: { bold: true } })
+    const totalCol = col
+    col++
+
+    ;[
+      ['PR', 'Time', 'Diff'],
+      ['Season Best', 'Time', 'Diff'],
+      ['Prev Race', 'Time', 'Diff'],
+    ].forEach(([groupLabel, subA, subB]) => {
+      ws.mergeCells(headerRow1, col, headerRow1, col + 1)
+      setCell(headerRow1, col, groupLabel, { fill: XLSX_FILL_SUBHEAD, font: { bold: true } })
+      setCell(headerRow2, col, subA, { fill: XLSX_FILL_SUBHEAD, font: { size: 9, color: { argb: 'FF666666' } } })
+      setCell(headerRow2, col + 1, subB, { fill: XLSX_FILL_SUBHEAD, font: { size: 9, color: { argb: 'FF666666' } } })
+      col += 2
+    })
+
+    row = headerRow2 + 1
+
+    group.rows.all.forEach(({ athlete, segments, totalMs, refs }) => {
+      const diffPR = refs.pr != null && totalMs != null ? totalMs - refs.pr : null
+      const diffSB = refs.sb != null && totalMs != null ? totalMs - refs.sb : null
+      const diffPrev = refs.prevRace != null && totalMs != null ? totalMs - refs.prevRace : null
+      const isNewPR = totalMs != null && (refs.pr == null || totalMs < refs.pr)
+
+      setCell(row, 1, athlete.name, { align: 'left', font: { bold: true } })
+      let c = 2
+      columns.forEach((colDef) => {
+        const v = cellForColumn(colDef, segments)
+        if (colDef.kind === 'diff') {
+          setCell(row, c, v == null ? '' : signedTime(v), xlsxDiffStyle(v))
+        } else {
+          setCell(row, c, v == null ? '' : formatTime(v))
+        }
+        c++
+      })
+      setCell(row, totalCol, totalMs == null ? '' : formatTime(totalMs), isNewPR ? { fill: XLSX_FILL_PR, font: { bold: true } } : { font: { bold: true } })
+      c = totalCol + 1
+      setCell(row, c, refs.pr == null ? '' : formatTime(refs.pr))
+      setCell(row, c + 1, diffPR == null ? '' : signedTime(diffPR), xlsxDiffStyle(diffPR))
+      setCell(row, c + 2, refs.sb == null ? '' : formatTime(refs.sb))
+      setCell(row, c + 3, diffSB == null ? '' : signedTime(diffSB), xlsxDiffStyle(diffSB))
+      setCell(row, c + 4, refs.prevRace == null ? '' : formatTime(refs.prevRace))
+      setCell(row, c + 5, diffPrev == null ? '' : signedTime(diffPrev), xlsxDiffStyle(diffPrev))
+      row++
+    })
+
+    if (group.rows.finishers.length) {
+      const top5 = group.rows.finishers.slice(0, 5)
+      const avg = top5.reduce((sum, r) => sum + r.totalMs, 0) / top5.length
+      const spread = top5.length > 1 ? top5[top5.length - 1].totalMs - top5[0].totalMs : null
+
+      setCell(row, 1, `Team Avg (top ${top5.length})`, { align: 'left', fill: XLSX_FILL_SUMMARY, font: { bold: true } })
+      ws.mergeCells(row, totalCol, row, totalCol)
+      setCell(row, totalCol, formatTime(avg), { fill: XLSX_FILL_SUMMARY, font: { bold: true } })
+      for (let c = 2; c < totalCol; c++) setCell(row, c, '', { fill: XLSX_FILL_SUMMARY })
+      for (let c = totalCol + 1; c <= totalCols; c++) setCell(row, c, '', { fill: XLSX_FILL_SUMMARY })
+      row++
+
+      if (spread != null) {
+        setCell(row, 1, `Top ${top5.length} spread`, { align: 'left', fill: XLSX_FILL_SUMMARY, font: { bold: true } })
+        setCell(row, totalCol, formatTime(spread), { fill: XLSX_FILL_SUMMARY, font: { bold: true } })
+        for (let c = 2; c < totalCol; c++) setCell(row, c, '', { fill: XLSX_FILL_SUMMARY })
+        for (let c = totalCol + 1; c <= totalCols; c++) setCell(row, c, '', { fill: XLSX_FILL_SUMMARY })
+        row++
+      }
+    }
+
+    row += 1 // blank row between squads
+  })
+
+  const buf = await wb.xlsx.writeBuffer()
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${race.name} - split sheet.xlsx`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -1320,7 +1489,10 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
           <button onClick={() => window.print()} className="text-xs text-gray-500 underline">
             Print
           </button>
-          <button onClick={() => downloadSplitSheetCSV(race, columns, groups)} className="text-xs text-gray-500 underline">
+          <button onClick={() => downloadSplitSheetXLSX(race, team, columns, groups)} className="text-xs text-gray-500 underline">
+            Download Excel
+          </button>
+          <button onClick={() => downloadSplitSheetCSV(race, columns, groups)} className="text-xs text-gray-400 underline">
             Download CSV
           </button>
         </div>
@@ -1347,7 +1519,7 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
             {group.label}
           </h3>
           <div className="overflow-x-auto print:overflow-visible">
-            <table className="split-sheet text-[10px] print:text-[8.5px] border-collapse w-full">
+            <table className="split-sheet text-sm print:text-[11px] border-collapse w-full">
               <thead>
                 <tr>
                   <th rowSpan={2} className="text-left align-bottom py-1 px-1 border border-gray-300 bg-gray-100">
@@ -1366,7 +1538,7 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
                       i += span
                     }
                     return groupedHeaders.map((h, idx) => (
-                      <th key={idx} colSpan={h.span} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-[9px] print:text-[7.5px] tracking-wide">
+                      <th key={idx} colSpan={h.span} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-xs print:text-[9.5px] tracking-wide">
                         {h.label}
                       </th>
                     ))
@@ -1374,28 +1546,28 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
                   <th rowSpan={2} className="py-1 px-1 border border-gray-300 bg-gray-100 align-bottom">
                     Total
                   </th>
-                  <th colSpan={2} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-[9px] print:text-[7.5px] tracking-wide">
+                  <th colSpan={2} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-xs print:text-[9.5px] tracking-wide">
                     PR
                   </th>
-                  <th colSpan={2} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-[9px] print:text-[7.5px] tracking-wide">
+                  <th colSpan={2} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-xs print:text-[9.5px] tracking-wide">
                     Season Best
                   </th>
-                  <th colSpan={2} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-[9px] print:text-[7.5px] tracking-wide">
+                  <th colSpan={2} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-xs print:text-[9.5px] tracking-wide">
                     Prev Race
                   </th>
                 </tr>
                 <tr>
                   {columns.map((c, idx) => (
-                    <th key={idx} className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">
+                    <th key={idx} className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">
                       {c.sub}
                     </th>
                   ))}
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Time</th>
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Diff</th>
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Time</th>
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Diff</th>
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Time</th>
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Diff</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Time</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Diff</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Time</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Diff</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Time</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Diff</th>
                 </tr>
               </thead>
               <tbody>
