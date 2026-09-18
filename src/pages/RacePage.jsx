@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
-import { formatTime, downloadCSV, downloadReportCSV, buildReportRows } from '../lib/csv'
+import { formatTime, downloadCSV } from '../lib/csv'
 import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
 import {
@@ -1057,49 +1057,256 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
   )
 }
 
-function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
-  const { sortedCheckpoints, rows } = buildReportRows(checkpoints, raceAthletes, splits)
-  const printRef = useRef(null)
+// ---- Split Sheet report helpers -------------------------------------------------
 
+// Cumulative + segment time for one athlete, across whichever checkpoints they
+// actually reached. `totalMs` is the cumulative time at the furthest checkpoint
+// they have a recorded split for (their finish, if they finished).
+function computeAthleteSegments(athleteRowId, sortedCheckpoints, splits) {
+  const cumulativeByCheckpoint = {}
+  splits.forEach((s) => {
+    if (s.athlete_id === athleteRowId) cumulativeByCheckpoint[s.checkpoint_id] = s.recorded_time_ms
+  })
+  let prevCumulative = 0
+  let totalMs = null
+  const segments = sortedCheckpoints.map((cp) => {
+    const cumulative = cumulativeByCheckpoint[cp.id]
+    if (cumulative == null) return { checkpointId: cp.id, cumulative: null, segment: null }
+    const segment = cumulative - prevCumulative
+    prevCumulative = cumulative
+    totalMs = cumulative
+    return { checkpointId: cp.id, cumulative, segment }
+  })
+  return { segments, totalMs }
+}
+
+// Builds the column layout for however many checkpoints this particular race used -
+// the report always mirrors whatever the coach actually set up for that race, not a
+// fixed mile1/mile2/finish assumption.
+function buildSplitSheetColumns(sortedCheckpoints) {
+  const n = sortedCheckpoints.length
+  const cols = []
+  sortedCheckpoints.forEach((cp, i) => {
+    if (i === 0) {
+      cols.push({ i, kind: 'split', groupLabel: cp.label, sub: 'Split' })
+    } else if (i === n - 1) {
+      cols.push({ i, kind: 'split', groupLabel: cp.label, sub: 'Split' })
+      cols.push({ i, kind: 'diff', groupLabel: cp.label, sub: `${i}–${i + 1} Diff` })
+    } else {
+      cols.push({ i, kind: 'time', groupLabel: cp.label, sub: 'Time' })
+      cols.push({ i, kind: 'split', groupLabel: cp.label, sub: 'Split' })
+      cols.push({ i, kind: 'diff', groupLabel: cp.label, sub: `${i}–${i + 1} Diff` })
+    }
+  })
+  return cols
+}
+
+function cellForColumn(col, segments) {
+  const seg = segments[col.i]
+  if (!seg) return null
+  if (col.kind === 'time') return seg.cumulative
+  if (col.kind === 'split') return seg.segment
+  if (col.kind === 'diff') {
+    const prevSeg = segments[col.i - 1]
+    if (seg.segment == null || !prevSeg || prevSeg.segment == null) return null
+    return seg.segment - prevSeg.segment
+  }
+  return null
+}
+
+// Gender lives on team_athletes, not on the race-specific `athletes` rows, so it's
+// looked up separately here rather than assumed to be on the roster already
+// loaded for the race (a non-owner coach viewing the report may not have that).
+function useGenderMap(raceAthletes) {
+  const [map, setMap] = useState({})
+  const ids = [...new Set(raceAthletes.map((a) => a.team_athlete_id).filter(Boolean))].sort().join(',')
   useEffect(() => {
-    function fitToPage() {
-      const el = printRef.current
-      if (!el) return
-      el.style.transform = 'none'
-      el.style.width = '100%'
+    if (!ids) {
+      setMap({})
+      return
+    }
+    supabase
+      .from('team_athletes')
+      .select('id, gender')
+      .in('id', ids.split(','))
+      .then(({ data }) => {
+        const m = {}
+        ;(data || []).forEach((r) => {
+          m[r.id] = r.gender
+        })
+        setMap(m)
+      })
+  }, [ids])
+  return map
+}
 
-      const naturalHeight = el.scrollHeight
-      // Letter page height minus the 0.4in top+bottom margins set in @page, at the
-      // standard 96 CSS px/inch browsers use for print layout.
-      const availableHeightPx = (11 - 0.8) * 96
+// PR (all-time best), SB (best this season) and previous-race total time, per
+// athlete, drawn from every other race in their history (same team if this race
+// belongs to one, else same coach) - same source pattern used for PR badges in
+// RaceLive, just aggregated to a per-race total instead of a per-checkpoint one.
+function useSplitSheetHistory(race) {
+  const [history, setHistory] = useState({})
+  useEffect(() => {
+    load()
+  }, [race.id])
 
-      if (naturalHeight > availableHeightPx) {
-        const scale = availableHeightPx / naturalHeight
-        el.style.transform = `scale(${scale})`
-        el.style.transformOrigin = 'top left'
-        el.style.width = `${100 / scale}%` // widen to compensate so it still fills the page horizontally
+  async function load() {
+    let pastRacesQuery = supabase.from('races').select('id, created_at').neq('id', race.id)
+    pastRacesQuery = race.team_id
+      ? pastRacesQuery.eq('team_id', race.team_id)
+      : pastRacesQuery.eq('coach_id', race.coach_id)
+    const { data: pastRaces } = await pastRacesQuery
+    if (!pastRaces || pastRaces.length === 0) {
+      setHistory({})
+      return
+    }
+    const raceIds = pastRaces.map((r) => r.id)
+    const dateByRace = {}
+    pastRaces.forEach((r) => {
+      dateByRace[r.id] = r.created_at
+    })
+
+    const [{ data: pastAthletes }, { data: pastCheckpoints }, { data: pastSplits }] = await Promise.all([
+      supabase.from('athletes').select('id, race_id, team_athlete_id').in('race_id', raceIds),
+      supabase.from('checkpoints').select('id, race_id, sort_order').in('race_id', raceIds),
+      supabase.from('splits').select('athlete_id, checkpoint_id, recorded_time_ms').in('race_id', raceIds),
+    ])
+    if (!pastAthletes || !pastCheckpoints || !pastSplits) return
+
+    const sortOrderByCheckpoint = {}
+    pastCheckpoints.forEach((cp) => {
+      sortOrderByCheckpoint[cp.id] = cp.sort_order
+    })
+
+    // Furthest checkpoint reached = that athlete's total time for that past race.
+    const totalByAthleteRow = {}
+    pastSplits.forEach((s) => {
+      const sortOrder = sortOrderByCheckpoint[s.checkpoint_id]
+      if (sortOrder == null) return
+      const cur = totalByAthleteRow[s.athlete_id]
+      if (!cur || sortOrder > cur.sortOrder) {
+        totalByAthleteRow[s.athlete_id] = { sortOrder, ms: s.recorded_time_ms }
+      }
+    })
+
+    const byTeamAthlete = {}
+    pastAthletes.forEach((a) => {
+      const total = totalByAthleteRow[a.id]
+      if (!a.team_athlete_id || !total) return
+      const list = byTeamAthlete[a.team_athlete_id] || (byTeamAthlete[a.team_athlete_id] = [])
+      list.push({ raceId: a.race_id, date: dateByRace[a.race_id], totalMs: total.ms })
+    })
+    Object.values(byTeamAthlete).forEach((list) => list.sort((x, y) => new Date(x.date) - new Date(y.date)))
+    setHistory(byTeamAthlete)
+  }
+
+  return history
+}
+
+function referenceTimes(history, teamAthleteId, currentRaceDate) {
+  const list = teamAthleteId ? history[teamAthleteId] : null
+  if (!list || list.length === 0) return { pr: null, sb: null, prevRace: null }
+  const pr = Math.min(...list.map((e) => e.totalMs))
+  const currentYear = new Date(currentRaceDate).getFullYear()
+  const seasonEntries = list.filter((e) => new Date(e.date).getFullYear() === currentYear)
+  const sb = seasonEntries.length ? Math.min(...seasonEntries.map((e) => e.totalMs)) : null
+  const before = list.filter((e) => new Date(e.date) < new Date(currentRaceDate))
+  const prevRace = before.length ? before[before.length - 1].totalMs : null
+  return { pr, sb, prevRace }
+}
+
+function groupSortedByFinishTime(rows) {
+  const finishers = rows.filter((r) => r.totalMs != null).sort((a, b) => a.totalMs - b.totalMs)
+  const others = rows.filter((r) => r.totalMs == null)
+  return { finishers, all: [...finishers, ...others] }
+}
+
+function fmtDiff(ms) {
+  if (ms == null) return { text: '—', cls: 'text-gray-300' }
+  if (ms === 0) return { text: formatTime(0), cls: 'text-gray-400' }
+  const sign = ms < 0 ? '-' : '+'
+  return { text: `${sign}${formatTime(Math.abs(ms))}`, cls: ms < 0 ? 'text-emerald-600 font-semibold' : 'text-red-600 font-semibold' }
+}
+
+function downloadSplitSheetCSV(race, columns, groups) {
+  const headerSub = ['Name', ...columns.map((c) => `${c.groupLabel} ${c.sub}`), 'Total', 'PR', 'PR Diff', 'Season Best', 'SB Diff', 'Prev Race', 'Prev Race Diff']
+  const lines = [headerSub.join(',')]
+  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+  groups.forEach((group) => {
+    lines.push(esc(`-- ${group.label} --`))
+    group.rows.all.forEach(({ athlete, segments, totalMs, refs }) => {
+      const cells = columns.map((col) => {
+        const v = cellForColumn(col, segments)
+        return v == null ? '' : formatTime(v)
+      })
+      const diffPR = refs.pr != null && totalMs != null ? totalMs - refs.pr : null
+      const diffSB = refs.sb != null && totalMs != null ? totalMs - refs.sb : null
+      const diffPrev = refs.prevRace != null && totalMs != null ? totalMs - refs.prevRace : null
+      const row = [
+        athlete.name,
+        ...cells,
+        totalMs == null ? '' : formatTime(totalMs),
+        refs.pr == null ? '' : formatTime(refs.pr),
+        diffPR == null ? '' : fmtDiff(diffPR).text,
+        refs.sb == null ? '' : formatTime(refs.sb),
+        diffSB == null ? '' : fmtDiff(diffSB).text,
+        refs.prevRace == null ? '' : formatTime(refs.prevRace),
+        diffPrev == null ? '' : fmtDiff(diffPrev).text,
+      ]
+      lines.push(row.map(esc).join(','))
+    })
+    if (group.rows.finishers.length) {
+      const top5 = group.rows.finishers.slice(0, 5)
+      const avg = top5.reduce((sum, r) => sum + r.totalMs, 0) / top5.length
+      const spread = top5.length > 1 ? top5[top5.length - 1].totalMs - top5[0].totalMs : null
+      // Blank filler lines up the value with the Total column; PR/SB/Prev cells are left off.
+      lines.push([`Team Avg (top ${top5.length})`, ...columns.map(() => ''), formatTime(avg)].map(esc).join(','))
+      if (spread != null) {
+        lines.push([`Top ${top5.length} spread`, ...columns.map(() => ''), formatTime(spread)].map(esc).join(','))
       }
     }
-    function resetFit() {
-      const el = printRef.current
-      if (!el) return
-      el.style.transform = 'none'
-      el.style.width = '100%'
-    }
-    window.addEventListener('beforeprint', fitToPage)
-    window.addEventListener('afterprint', resetFit)
-    return () => {
-      window.removeEventListener('beforeprint', fitToPage)
-      window.removeEventListener('afterprint', resetFit)
-    }
-  }, [])
+  })
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${race.name} - split sheet.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
+  const sortedCheckpoints = [...checkpoints].sort((a, b) => a.sort_order - b.sort_order)
+  const columns = buildSplitSheetColumns(sortedCheckpoints)
+  const genderMap = useGenderMap(raceAthletes)
+  const history = useSplitSheetHistory(race)
+
+  const rowsAll = raceAthletes.map((a) => {
+    const { segments, totalMs } = computeAthleteSegments(a.id, sortedCheckpoints, splits)
+    const gender = a.team_athlete_id ? genderMap[a.team_athlete_id] : null
+    const refs = referenceTimes(history, a.team_athlete_id, race.created_at)
+    return { athlete: a, segments, totalMs, gender, refs }
+  })
+
+  const girls = groupSortedByFinishTime(rowsAll.filter((r) => r.gender === 'F'))
+  const boys = groupSortedByFinishTime(rowsAll.filter((r) => r.gender === 'M'))
+  const unassigned = groupSortedByFinishTime(rowsAll.filter((r) => r.gender !== 'F' && r.gender !== 'M'))
+
+  const groups = [
+    { label: 'Girls', rows: girls },
+    { label: 'Boys', rows: boys },
+    { label: 'Unassigned', rows: unassigned },
+  ].filter((g) => g.rows.all.length > 0)
 
   return (
     <div>
       <style>{`
+        @page { size: landscape; margin: 10mm 8mm; }
         @media print {
-          @page { size: letter portrait; margin: 0.4in; }
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          table.split-sheet thead { display: table-header-group; }
+          table.split-sheet tr { page-break-inside: avoid; }
+          .split-squad { page-break-inside: auto; }
         }
       `}</style>
 
@@ -1107,119 +1314,166 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
         &larr; Back to race
       </button>
 
-      {team && (
-        <div className="flex items-center gap-3 mb-4 print:hidden">
-          {team.photo_url && (
-            <img src={team.photo_url} alt="" className="w-12 h-12 rounded-lg object-cover border border-gray-200" />
-          )}
-          <div>
-            <div className="text-sm font-medium text-gray-700">{team.name}</div>
-            <div className="text-xs text-gray-400">{race.name}</div>
-          </div>
-        </div>
-      )}
-
       <div className="flex items-center justify-between mb-4 print:hidden">
         <h2 className="text-lg font-semibold">Full report</h2>
         <div className="flex items-center gap-3">
           <button onClick={() => window.print()} className="text-xs text-gray-500 underline">
             Print
           </button>
-          <button
-            onClick={() => downloadReportCSV(race.name, checkpoints, raceAthletes, splits)}
-            className="text-xs text-gray-500 underline"
-          >
+          <button onClick={() => downloadSplitSheetCSV(race, columns, groups)} className="text-xs text-gray-500 underline">
             Download CSV
           </button>
         </div>
       </div>
 
-      <div ref={printRef}>
-        {/* Print-only letterhead */}
-        <div className="hidden print:flex items-center gap-3 border-b-2 border-gray-900 pb-2 mb-3">
-          {team?.photo_url && (
-            <img src={team.photo_url} alt="" className="w-9 h-9 rounded object-cover" />
-          )}
-          <div>
-            <div className="text-base font-extrabold leading-tight">{team ? team.name : race.name}</div>
-            <div className="text-xs text-gray-600">
-              {team && <>{race.name} · </>}
-              {new Date(race.created_at).toLocaleDateString(undefined, {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-              })}
-            </div>
+      {/* Letterhead - team name/photo come straight from this race's Team page */}
+      <div className="flex items-center gap-3 border-b-2 border-gray-900 pb-2 mb-4 print:pb-2 print:mb-3">
+        {team?.photo_url && (
+          <img src={team.photo_url} alt="" className="w-10 h-10 print:w-9 print:h-9 rounded-full object-cover border border-gray-200" />
+        )}
+        <div>
+          <div className="text-base font-extrabold leading-tight">{team ? team.name : race.name}</div>
+          <div className="text-xs text-gray-500">
+            Split Sheet Report
+            {team && <> · {race.name}</>} ·{' '}
+            {new Date(race.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
           </div>
         </div>
-
-        <div className="overflow-x-auto print:overflow-visible">
-          <table className="text-sm print:text-[7.5px] border-collapse w-full">
-            <thead>
-              <tr>
-                <th className="text-left py-2 print:py-1 pr-4 print:pr-2 sticky left-0 bg-white print:static">#</th>
-                <th className="text-left py-2 print:py-1 pr-4 print:pr-2 sticky left-0 bg-white print:static">Runner</th>
-                {sortedCheckpoints.map((cp) => (
-                  <th
-                    key={cp.id}
-                    colSpan={2}
-                    className="text-center py-2 print:py-1 px-2 print:px-1 border-l border-gray-200 uppercase print:tracking-wide text-gray-500 print:text-[6.5px] font-semibold"
-                  >
-                    {cp.label}
-                  </th>
-                ))}
-              </tr>
-              <tr>
-                <th className="sticky left-0 bg-white print:static"></th>
-                <th className="sticky left-0 bg-white print:static"></th>
-                {sortedCheckpoints.map((cp) => (
-                  <>
-                    <th
-                      key={`${cp.id}-time`}
-                      className="text-xs print:text-[6.5px] font-normal text-gray-400 px-2 print:px-1 border-l border-gray-200"
-                    >
-                      Time
-                    </th>
-                    <th key={`${cp.id}-split`} className="text-xs print:text-[6.5px] font-normal text-gray-400 px-2 print:px-1">
-                      Split
-                    </th>
-                  </>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(({ athlete, checkpointCells }, i) => (
-                <tr
-                  key={athlete.id}
-                  className={`border-t border-gray-100 print:border-gray-200 ${
-                    i % 2 === 1 ? 'print:bg-gray-50' : ''
-                  }`}
-                >
-                  <td className="py-2 print:py-0.5 pr-4 print:pr-2 text-gray-400 sticky left-0 bg-white print:static print:bg-transparent">
-                    {i + 1}
-                  </td>
-                  <td className="py-2 print:py-0.5 pr-4 print:pr-2 font-medium sticky left-0 bg-white print:static print:bg-transparent">
-                    {athlete.name}
-                  </td>
-                  {checkpointCells.map((c) => (
-                    <>
-                      <td
-                        key={`${c.checkpointId}-time`}
-                        className="text-right tabular-nums px-2 print:px-1 border-l border-gray-100 print:border-gray-200"
-                      >
-                        {formatTime(c.cumulative)}
-                      </td>
-                      <td key={`${c.checkpointId}-split`} className="text-right tabular-nums px-2 print:px-1 text-gray-500">
-                        {formatTime(c.segment)}
-                      </td>
-                    </>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </div>
+
+      {groups.map((group) => (
+        <div key={group.label} className="split-squad mb-6 print:mb-4">
+          <h3 className="inline-block text-xs font-bold uppercase tracking-wide bg-gray-900 text-white px-2 py-1 mb-2">
+            {group.label}
+          </h3>
+          <div className="overflow-x-auto print:overflow-visible">
+            <table className="split-sheet text-[10px] print:text-[8.5px] border-collapse w-full">
+              <thead>
+                <tr>
+                  <th rowSpan={2} className="text-left align-bottom py-1 px-1 border border-gray-300 bg-gray-100">
+                    Name
+                  </th>
+                  {(() => {
+                    const groupedHeaders = []
+                    let i = 0
+                    while (i < columns.length) {
+                      const label = columns[i].groupLabel
+                      let span = 1
+                      while (i + span < columns.length && columns[i + span].groupLabel === label && columns[i + span].i === columns[i].i) {
+                        span++
+                      }
+                      groupedHeaders.push({ label, span })
+                      i += span
+                    }
+                    return groupedHeaders.map((h, idx) => (
+                      <th key={idx} colSpan={h.span} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-[9px] print:text-[7.5px] tracking-wide">
+                        {h.label}
+                      </th>
+                    ))
+                  })()}
+                  <th rowSpan={2} className="py-1 px-1 border border-gray-300 bg-gray-100 align-bottom">
+                    Total
+                  </th>
+                  <th colSpan={2} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-[9px] print:text-[7.5px] tracking-wide">
+                    PR
+                  </th>
+                  <th colSpan={2} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-[9px] print:text-[7.5px] tracking-wide">
+                    Season Best
+                  </th>
+                  <th colSpan={2} className="py-1 px-1 border border-gray-300 bg-gray-200 uppercase text-[9px] print:text-[7.5px] tracking-wide">
+                    Prev Race
+                  </th>
+                </tr>
+                <tr>
+                  {columns.map((c, idx) => (
+                    <th key={idx} className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">
+                      {c.sub}
+                    </th>
+                  ))}
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Time</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Diff</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Time</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Diff</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Time</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-[9px] print:text-[7.5px]">Diff</th>
+                </tr>
+              </thead>
+              <tbody>
+                {group.rows.all.map(({ athlete, segments, totalMs, refs }) => {
+                  const diffPR = refs.pr != null && totalMs != null ? totalMs - refs.pr : null
+                  const diffSB = refs.sb != null && totalMs != null ? totalMs - refs.sb : null
+                  const diffPrev = refs.prevRace != null && totalMs != null ? totalMs - refs.prevRace : null
+                  const isNewPR = totalMs != null && (refs.pr == null || totalMs < refs.pr)
+                  const prDiff = fmtDiff(diffPR)
+                  const sbDiff = fmtDiff(diffSB)
+                  const prevDiff = fmtDiff(diffPrev)
+                  return (
+                    <tr key={athlete.id}>
+                      <td className="py-0.5 px-1 border border-gray-200 font-medium whitespace-nowrap">{athlete.name}</td>
+                      {columns.map((col, idx) => {
+                        const v = cellForColumn(col, segments)
+                        if (col.kind === 'diff') {
+                          const d = fmtDiff(v)
+                          return (
+                            <td key={idx} className={`py-0.5 px-1 border border-gray-200 text-right tabular-nums ${d.cls}`}>
+                              {d.text}
+                            </td>
+                          )
+                        }
+                        return (
+                          <td key={idx} className="py-0.5 px-1 border border-gray-200 text-right tabular-nums text-gray-600">
+                            {v == null ? '—' : formatTime(v)}
+                          </td>
+                        )
+                      })}
+                      <td className={`py-0.5 px-1 border border-gray-200 text-right tabular-nums font-semibold ${isNewPR ? 'bg-yellow-100' : ''}`}>
+                        {totalMs == null ? '—' : formatTime(totalMs)}
+                      </td>
+                      <td className="py-0.5 px-1 border border-gray-200 text-right tabular-nums text-gray-600">
+                        {refs.pr == null ? '—' : formatTime(refs.pr)}
+                      </td>
+                      <td className={`py-0.5 px-1 border border-gray-200 text-right tabular-nums ${prDiff.cls}`}>{prDiff.text}</td>
+                      <td className="py-0.5 px-1 border border-gray-200 text-right tabular-nums text-gray-600">
+                        {refs.sb == null ? '—' : formatTime(refs.sb)}
+                      </td>
+                      <td className={`py-0.5 px-1 border border-gray-200 text-right tabular-nums ${sbDiff.cls}`}>{sbDiff.text}</td>
+                      <td className="py-0.5 px-1 border border-gray-200 text-right tabular-nums text-gray-600">
+                        {refs.prevRace == null ? '—' : formatTime(refs.prevRace)}
+                      </td>
+                      <td className={`py-0.5 px-1 border border-gray-200 text-right tabular-nums ${prevDiff.cls}`}>{prevDiff.text}</td>
+                    </tr>
+                  )
+                })}
+                {group.rows.finishers.length > 0 &&
+                  (() => {
+                    const top5 = group.rows.finishers.slice(0, 5)
+                    const avg = top5.reduce((sum, r) => sum + r.totalMs, 0) / top5.length
+                    const spread = top5.length > 1 ? top5[top5.length - 1].totalMs - top5[0].totalMs : null
+                    const totalCols = columns.length + 1 + 6 // checkpoint cols + Total + PR/SB/Prev (2 each) - all columns after Name
+                    return (
+                      <>
+                        <tr className="bg-gray-50 font-semibold border-t-2 border-gray-900">
+                          <td className="py-0.5 px-1 border border-gray-200">Team Avg (top {top5.length})</td>
+                          <td colSpan={totalCols} className="py-0.5 px-1 border border-gray-200 text-right tabular-nums">
+                            {formatTime(avg)}
+                          </td>
+                        </tr>
+                        {spread != null && (
+                          <tr className="bg-gray-50 font-semibold">
+                            <td className="py-0.5 px-1 border border-gray-200">Top {top5.length} spread</td>
+                            <td colSpan={totalCols} className="py-0.5 px-1 border border-gray-200 text-right tabular-nums">
+                              {formatTime(spread)}
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    )
+                  })()}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
