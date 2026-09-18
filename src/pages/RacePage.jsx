@@ -1470,7 +1470,7 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
   return (
     <div>
       <style>{`
-        @page { size: landscape; margin: 10mm 8mm; }
+        @page { size: portrait; margin: 10mm 8mm; }
         @media print {
           body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           table.split-sheet thead { display: table-header-group; }
