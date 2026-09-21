@@ -44,3 +44,15 @@ export default function App() {
           <Route path="/team" element={session ? <Team session={session} /> : <Login />} />
           <Route path="/athlete/:teamAthleteId" element={session ? <AthleteHistory /> : <Login />} />
           <Route path="/workouts" element={session ? <Workouts session={session} /> : <Login />} />
+          <Route path="/workout/:workoutId" element={session ? <WorkoutPage session={session} /> : <Login />} />
+          <Route path="/track" element={session ? <TrackList session={session} /> : <Login />} />
+          <Route path="/track/roster" element={session ? <TrackRoster session={session} /> : <Login />} />
+          <Route path="/track/:trackRaceId" element={session ? <TrackPage session={session} /> : <Login />} />
+          <Route path="/race/:raceId" element={<RacePage session={session} />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </div>
+      {session && <BottomNav />}
+    </>
+  )
+}
