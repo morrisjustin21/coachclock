@@ -22,6 +22,15 @@ function RunnerIcon(props) {
   )
 }
 
+function TrackOvalIcon(props) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" {...props}>
+      <rect x="3" y="6" width="18" height="12" rx="6" />
+      <rect x="8" y="9" width="8" height="6" rx="3" />
+    </svg>
+  )
+}
+
 function TeamIcon(props) {
   return (
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" {...props}>
@@ -46,10 +55,17 @@ function RosterIcon(props) {
 const TABS = [
   {
     key: 'race',
-    label: 'Race',
+    label: 'XC Race',
     to: '/',
     Icon: StopwatchIcon,
     match: (p) => p === '/' || p.startsWith('/race/') || p === '/join',
+  },
+  {
+    key: 'track',
+    label: 'Track',
+    to: '/track',
+    Icon: TrackOvalIcon,
+    match: (p) => p.startsWith('/track'),
   },
   {
     key: 'practice',
