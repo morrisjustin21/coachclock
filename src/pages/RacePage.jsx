@@ -890,11 +890,14 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
   return (
     <div>
       {isOwner && (
+        <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2 mb-2">
+          <span className="text-xs text-gray-500">Coach join code:</span>
+          <span className="text-sm font-mono font-semibold tracking-wider">{race.join_code}</span>
+        </div>
+      )}
+
+      {canRecord && (
         <div className="space-y-2 mb-4">
-          <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2">
-            <span className="text-xs text-gray-500">Coach join code:</span>
-            <span className="text-sm font-mono font-semibold tracking-wider">{race.join_code}</span>
-          </div>
           <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2">
             <span className="text-xs text-gray-500">Results link for parents &amp; fans:</span>
             <button onClick={copyResultsLink} className="text-xs text-gray-700 underline ml-auto">
