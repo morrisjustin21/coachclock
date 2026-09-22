@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
+import { formatTime } from '../lib/csv'
 
 function generateJoinCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -9,6 +10,140 @@ function generateJoinCode() {
     code += chars[Math.floor(Math.random() * chars.length)]
   }
   return code
+}
+
+// --- Season report helpers -------------------------------------------------
+// Shared by both the XC and Track season reports below. Each report finds the
+// "finish" checkpoint for every race (highest sort_order for XC, greatest
+// distance_m for Track), pulls each athlete's time there, then rolls that up
+// per roster athlete: races run, season-best time, and most recent time.
+
+function buildFinishCheckpointMap(checkpoints, raceKey, orderKey) {
+  const map = {}
+  checkpoints.forEach((cp) => {
+    const rid = cp[raceKey]
+    const order = cp[orderKey]
+    const cur = map[rid]
+    if (!cur || order > cur.order) map[rid] = { id: cp.id, order }
+  })
+  return map
+}
+
+function buildTotalsByParticipant(splits, raceKey, finishMap) {
+  const totals = {}
+  splits.forEach((s) => {
+    const finish = finishMap[s[raceKey]]
+    if (!finish || s.checkpoint_id !== finish.id) return
+    totals[s.athlete_id] = s.recorded_time_ms
+  })
+  return totals
+}
+
+// rosterList: [{ id, name, gender }]
+// raceList: [{ id, created_at }]
+// participantList: [{ id, raceId, rosterId }]
+// totalsByParticipantId: { participantRowId: ms }
+function buildSeasonAggregates(rosterList, raceList, participantList, totalsByParticipantId) {
+  const dateByRace = {}
+  raceList.forEach((r) => {
+    dateByRace[r.id] = r.created_at
+  })
+
+  const byRoster = {}
+  participantList.forEach((p) => {
+    const ms = totalsByParticipantId[p.id]
+    if (ms == null || !p.rosterId) return
+    const list = byRoster[p.rosterId] || (byRoster[p.rosterId] = [])
+    list.push({ raceId: p.raceId, date: dateByRace[p.raceId], ms })
+  })
+  Object.values(byRoster).forEach((list) => list.sort((a, b) => new Date(a.date) - new Date(b.date)))
+
+  return rosterList
+    .map((a) => {
+      const list = byRoster[a.id]
+      if (!list || list.length === 0) return null
+      const seasonBest = Math.min(...list.map((e) => e.ms))
+      const mostRecent = list[list.length - 1]
+      return {
+        athlete: a,
+        racesRun: list.length,
+        seasonBest,
+        mostRecentMs: mostRecent.ms,
+        mostRecentDate: mostRecent.date,
+      }
+    })
+    .filter(Boolean)
+    .sort((x, y) => x.seasonBest - y.seasonBest)
+}
+
+function groupByGender(rows) {
+  return {
+    girls: rows.filter((r) => r.athlete.gender === 'F'),
+    boys: rows.filter((r) => r.athlete.gender === 'M'),
+    unassigned: rows.filter((r) => r.athlete.gender !== 'F' && r.athlete.gender !== 'M'),
+  }
+}
+
+function fmtDiff(ms) {
+  if (ms == null || Number.isNaN(ms)) return { text: '—', cls: 'text-gray-300' }
+  if (ms === 0) return { text: formatTime(0), cls: 'text-gray-400' }
+  const sign = ms < 0 ? '-' : '+'
+  return {
+    text: `${sign}${formatTime(Math.abs(ms))}`,
+    cls: ms < 0 ? 'text-emerald-600 font-semibold' : 'text-red-600 font-semibold',
+  }
+}
+
+function SeasonReportSquad({ label, rows }) {
+  if (rows.length === 0) return null
+  return (
+    <div className="mb-3 last:mb-0">
+      <h5 className="text-xs font-medium text-gray-600 mb-1">{label}</h5>
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="text-left text-xs text-gray-400 border-b border-gray-200">
+            <th className="py-1 pr-2 font-normal">Runner</th>
+            <th className="py-1 pr-2 font-normal text-right">Races</th>
+            <th className="py-1 pr-2 font-normal text-right">Season Best</th>
+            <th className="py-1 pr-2 font-normal text-right">Most Recent</th>
+            <th className="py-1 pr-2 font-normal text-right">vs. Best</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const d = fmtDiff(r.mostRecentMs - r.seasonBest)
+            return (
+              <tr key={r.athlete.id} className="border-b border-gray-100">
+                <td className="py-1.5 pr-2 font-medium">{r.athlete.name}</td>
+                <td className="py-1.5 pr-2 text-right tabular-nums text-gray-500">{r.racesRun}</td>
+                <td className="py-1.5 pr-2 text-right tabular-nums font-medium">{formatTime(r.seasonBest)}</td>
+                <td className="py-1.5 pr-2 text-right tabular-nums">{formatTime(r.mostRecentMs)}</td>
+                <td className={`py-1.5 pr-2 text-right tabular-nums ${d.cls}`}>{d.text}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function SeasonReportGroup({ title, groups }) {
+  const hasRows = groups.girls.length || groups.boys.length || groups.unassigned.length
+  return (
+    <div className="mb-4 last:mb-0">
+      {title && <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">{title}</h4>}
+      {!hasRows ? (
+        <p className="text-sm text-gray-400 py-1">No season results yet.</p>
+      ) : (
+        <>
+          <SeasonReportSquad label="Girls" rows={groups.girls} />
+          <SeasonReportSquad label="Boys" rows={groups.boys} />
+          <SeasonReportSquad label="Unassigned" rows={groups.unassigned} />
+        </>
+      )}
+    </div>
+  )
 }
 
 export default function Team({ session }) {
@@ -31,6 +166,20 @@ export default function Team({ session }) {
   const [photoPreview, setPhotoPreview] = useState(null)
   const [saving, setSaving] = useState(false)
 
+  // XC/Track sub-tab. Track only appears once this team actually has track
+  // activity, so a plain XC team's page stays uncluttered.
+  const [subTab, setSubTab] = useState('xc')
+  const [hasTrack, setHasTrack] = useState(false)
+  const [trackRaces, setTrackRaces] = useState([])
+
+  const [showXcReport, setShowXcReport] = useState(false)
+  const [xcReport, setXcReport] = useState(null) // { girls, boys, unassigned }
+  const [xcReportLoading, setXcReportLoading] = useState(false)
+
+  const [showTrackReport, setShowTrackReport] = useState(false)
+  const [trackReport, setTrackReport] = useState(null) // { events: [{ label, girls, boys, unassigned }] }
+  const [trackReportLoading, setTrackReportLoading] = useState(false)
+
   const activeTeam = teams.find((t) => t.id === activeTeamId) || null
 
   useEffect(() => {
@@ -38,7 +187,14 @@ export default function Team({ session }) {
   }, [])
 
   useEffect(() => {
-    if (activeTeamId) loadRaces(activeTeamId)
+    if (!activeTeamId) return
+    loadRaces(activeTeamId)
+    loadTrackInfo(activeTeamId)
+    setSubTab('xc')
+    setShowXcReport(false)
+    setShowTrackReport(false)
+    setXcReport(null)
+    setTrackReport(null)
   }, [activeTeamId])
 
   async function loadTeams() {
@@ -80,6 +236,120 @@ export default function Team({ session }) {
       .eq('team_id', teamId)
       .order('created_at', { ascending: false })
     setRaces(data || [])
+  }
+
+  async function loadTrackInfo(teamId) {
+    const [{ data: tRaces }, { count: athleteCount }] = await Promise.all([
+      supabase.from('track_races').select('*').eq('team_id', teamId).order('created_at', { ascending: false }),
+      supabase.from('track_athletes').select('id', { count: 'exact', head: true }).eq('team_id', teamId),
+    ])
+    setTrackRaces(tRaces || [])
+    setHasTrack((tRaces && tRaces.length > 0) || (athleteCount || 0) > 0)
+  }
+
+  async function loadXcSeasonReport() {
+    if (!activeTeam) return
+    setXcReportLoading(true)
+
+    const [{ data: roster }, { data: teamRaces }] = await Promise.all([
+      supabase.from('team_athletes').select('id, name, gender').eq('team_id', activeTeam.id),
+      supabase
+        .from('races')
+        .select('id, created_at')
+        .eq('team_id', activeTeam.id)
+        .order('created_at', { ascending: true }),
+    ])
+
+    if (!teamRaces || teamRaces.length === 0) {
+      setXcReport({ girls: [], boys: [], unassigned: [] })
+      setXcReportLoading(false)
+      return
+    }
+    const raceIds = teamRaces.map((r) => r.id)
+
+    const [{ data: participants }, { data: checkpoints }, { data: splits }] = await Promise.all([
+      supabase.from('athletes').select('id, race_id, team_athlete_id').in('race_id', raceIds),
+      supabase.from('checkpoints').select('id, race_id, sort_order').in('race_id', raceIds),
+      supabase.from('splits').select('athlete_id, race_id, checkpoint_id, recorded_time_ms').in('race_id', raceIds),
+    ])
+
+    const finishMap = buildFinishCheckpointMap(checkpoints || [], 'race_id', 'sort_order')
+    const totals = buildTotalsByParticipant(splits || [], 'race_id', finishMap)
+    const participantList = (participants || []).map((p) => ({
+      id: p.id,
+      raceId: p.race_id,
+      rosterId: p.team_athlete_id,
+    }))
+
+    const rows = buildSeasonAggregates(roster || [], teamRaces, participantList, totals)
+    setXcReport(groupByGender(rows))
+    setXcReportLoading(false)
+  }
+
+  async function loadTrackSeasonReport() {
+    if (!activeTeam) return
+    setTrackReportLoading(true)
+
+    const [{ data: roster }, { data: teamRaces }] = await Promise.all([
+      supabase.from('track_athletes').select('id, name, gender').eq('team_id', activeTeam.id),
+      supabase
+        .from('track_races')
+        .select('id, created_at, event_label')
+        .eq('team_id', activeTeam.id)
+        .order('created_at', { ascending: true }),
+    ])
+
+    if (!teamRaces || teamRaces.length === 0) {
+      setTrackReport({ events: [] })
+      setTrackReportLoading(false)
+      return
+    }
+    const raceIds = teamRaces.map((r) => r.id)
+
+    const [{ data: participants }, { data: checkpoints }, { data: splits }] = await Promise.all([
+      supabase.from('track_race_athletes').select('id, track_race_id, track_athlete_id').in('track_race_id', raceIds),
+      supabase.from('track_checkpoints').select('id, track_race_id, distance_m').in('track_race_id', raceIds),
+      supabase
+        .from('track_splits')
+        .select('athlete_id, track_race_id, checkpoint_id, recorded_time_ms')
+        .in('track_race_id', raceIds),
+    ])
+
+    const finishMap = buildFinishCheckpointMap(checkpoints || [], 'track_race_id', 'distance_m')
+    const totals = buildTotalsByParticipant(splits || [], 'track_race_id', finishMap)
+    const participantList = (participants || []).map((p) => ({
+      id: p.id,
+      raceId: p.track_race_id,
+      rosterId: p.track_athlete_id,
+    }))
+
+    // Times only mean anything against the same event, so each event gets its own
+    // rollup rather than one race list lumped together.
+    const eventLabels = [...new Set(teamRaces.map((r) => r.event_label || 'Unlabeled'))]
+    const events = eventLabels
+      .map((label) => {
+        const racesForEvent = teamRaces.filter((r) => (r.event_label || 'Unlabeled') === label)
+        const raceIdSet = new Set(racesForEvent.map((r) => r.id))
+        const participantsForEvent = participantList.filter((p) => raceIdSet.has(p.raceId))
+        const rows = buildSeasonAggregates(roster || [], racesForEvent, participantsForEvent, totals)
+        return { label, ...groupByGender(rows) }
+      })
+      .filter((e) => e.girls.length || e.boys.length || e.unassigned.length)
+
+    setTrackReport({ events })
+    setTrackReportLoading(false)
+  }
+
+  function toggleXcReport() {
+    const next = !showXcReport
+    setShowXcReport(next)
+    if (next && !xcReport) loadXcSeasonReport()
+  }
+
+  function toggleTrackReport() {
+    const next = !showTrackReport
+    setShowTrackReport(next)
+    if (next && !trackReport) loadTrackSeasonReport()
   }
 
   async function createTeam(e) {
@@ -418,33 +688,124 @@ export default function Team({ session }) {
             </div>
           )}
 
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-medium text-gray-700">Season races ({races.length})</h3>
+          <div className="flex items-center justify-between mb-4">
+            {hasTrack ? (
+              <div className="flex text-sm border border-gray-300 rounded-lg overflow-hidden">
+                <button
+                  onClick={() => setSubTab('xc')}
+                  className={`px-4 py-1.5 ${subTab === 'xc' ? 'bg-gray-900 text-white' : 'text-gray-600'}`}
+                >
+                  XC
+                </button>
+                <button
+                  onClick={() => setSubTab('track')}
+                  className={`px-4 py-1.5 border-l border-gray-300 ${
+                    subTab === 'track' ? 'bg-gray-900 text-white' : 'text-gray-600'
+                  }`}
+                >
+                  Track
+                </button>
+              </div>
+            ) : (
+              <span />
+            )}
             <button onClick={leaveTeam} className="text-xs text-red-600 underline">
               Leave team
             </button>
           </div>
 
-          {races.length === 0 ? (
-            <p className="text-sm text-gray-400">
-              No races yet. When creating a race, choose "{activeTeam.name}" and it'll show up here.
-            </p>
+          {subTab === 'xc' ? (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-medium text-gray-700">Season races ({races.length})</h3>
+                <button onClick={toggleXcReport} className="text-xs text-gray-500 underline">
+                  {showXcReport ? 'Hide season report' : 'Season report'}
+                </button>
+              </div>
+
+              {showXcReport && (
+                <div className="border border-gray-200 rounded-lg px-3 py-3 mb-4 bg-gray-50">
+                  {xcReportLoading || !xcReport ? (
+                    <p className="text-sm text-gray-500">Loading season report...</p>
+                  ) : (
+                    <SeasonReportGroup groups={xcReport} />
+                  )}
+                </div>
+              )}
+
+              {races.length === 0 ? (
+                <p className="text-sm text-gray-400">
+                  No races yet. When creating a race, choose "{activeTeam.name}" and it'll show up here.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {races.map((r) => (
+                    <li key={r.id}>
+                      <Link
+                        to={`/race/${r.id}`}
+                        className="block border border-gray-200 rounded-lg px-4 py-3 hover:bg-gray-50"
+                      >
+                        <div className="font-medium text-sm">{r.name}</div>
+                        <div className="text-xs text-gray-500">
+                          {new Date(r.created_at).toLocaleDateString()} · {r.status}
+                        </div>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
           ) : (
-            <ul className="space-y-2">
-              {races.map((r) => (
-                <li key={r.id}>
-                  <Link
-                    to={`/race/${r.id}`}
-                    className="block border border-gray-200 rounded-lg px-4 py-3 hover:bg-gray-50"
-                  >
-                    <div className="font-medium text-sm">{r.name}</div>
-                    <div className="text-xs text-gray-500">
-                      {new Date(r.created_at).toLocaleDateString()} · {r.status}
-                    </div>
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-medium text-gray-700">Track races ({trackRaces.length})</h3>
+                <div className="flex items-center gap-3">
+                  <button onClick={toggleTrackReport} className="text-xs text-gray-500 underline">
+                    {showTrackReport ? 'Hide season report' : 'Season report'}
+                  </button>
+                  <Link to="/track/roster" className="text-xs text-gray-500 underline">
+                    Track roster
                   </Link>
-                </li>
-              ))}
-            </ul>
+                </div>
+              </div>
+
+              {showTrackReport && (
+                <div className="border border-gray-200 rounded-lg px-3 py-3 mb-4 bg-gray-50">
+                  {trackReportLoading || !trackReport ? (
+                    <p className="text-sm text-gray-500">Loading season report...</p>
+                  ) : trackReport.events.length === 0 ? (
+                    <p className="text-sm text-gray-400">No season results yet.</p>
+                  ) : (
+                    trackReport.events.map((ev) => (
+                      <SeasonReportGroup key={ev.label} title={ev.label} groups={ev} />
+                    ))
+                  )}
+                </div>
+              )}
+
+              {trackRaces.length === 0 ? (
+                <p className="text-sm text-gray-400">
+                  No track races yet for this team. Create one from the Track tab and choose "{activeTeam.name}".
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {trackRaces.map((r) => (
+                    <li key={r.id}>
+                      <Link
+                        to={`/track/${r.id}`}
+                        className="block border border-gray-200 rounded-lg px-4 py-3 hover:bg-gray-50"
+                      >
+                        <div className="font-medium text-sm">{r.name}</div>
+                        <div className="text-xs text-gray-500">
+                          {new Date(r.created_at).toLocaleDateString()}
+                          {r.event_label && <> · {r.event_label}</>} · {r.status}
+                        </div>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
           )}
         </>
       )}
