@@ -24,7 +24,7 @@ function PendingScreen({ status }) {
       <p className="text-sm text-gray-500 mb-6">
         {status === 'blocked'
           ? "This account doesn't have access to Coach's Clock. Reach out if you think that's a mistake."
-          : "Your account is created, but Coach's Clock is invite-only right now. Text or email Justin to get your team activated."}
+          : "Your account is created, but Coach's Clock is invite-only right now. Text Justin at (580) 736-5225 to get your team activated."}
       </p>
       <button onClick={() => supabase.auth.signOut()} className="text-sm text-gray-500 underline">
         Sign out
