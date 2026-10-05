@@ -86,7 +86,7 @@ function groupByGender(rows) {
 
 function fmtDiff(ms) {
   if (ms == null || Number.isNaN(ms)) return { text: '—', cls: 'text-gray-300' }
-  if (ms === 0) return { text: formatTime(0), cls: 'text-gray-400' }
+  if (ms === 0) return { text: formatTime(0), cls: 'text-gray-600' }
   const sign = ms < 0 ? '-' : '+'
   return {
     text: `${sign}${formatTime(Math.abs(ms))}`,
@@ -101,7 +101,7 @@ function SeasonReportSquad({ label, rows }) {
       <h5 className="text-xs font-medium text-gray-600 mb-1">{label}</h5>
       <table className="w-full text-sm border-collapse">
         <thead>
-          <tr className="text-left text-xs text-gray-400 border-b border-gray-200">
+          <tr className="text-left text-xs text-gray-600 border-b border-gray-200">
             <th className="py-1 pr-2 font-normal">Runner</th>
             <th className="py-1 pr-2 font-normal text-right">Races</th>
             <th className="py-1 pr-2 font-normal text-right">Season Best</th>
@@ -115,7 +115,7 @@ function SeasonReportSquad({ label, rows }) {
             return (
               <tr key={r.athlete.id} className="border-b border-gray-100">
                 <td className="py-1.5 pr-2 font-medium">{r.athlete.name}</td>
-                <td className="py-1.5 pr-2 text-right tabular-nums text-gray-500">{r.racesRun}</td>
+                <td className="py-1.5 pr-2 text-right tabular-nums text-gray-700">{r.racesRun}</td>
                 <td className="py-1.5 pr-2 text-right tabular-nums font-medium">{formatTime(r.seasonBest)}</td>
                 <td className="py-1.5 pr-2 text-right tabular-nums">{formatTime(r.mostRecentMs)}</td>
                 <td className={`py-1.5 pr-2 text-right tabular-nums ${d.cls}`}>{d.text}</td>
@@ -132,9 +132,9 @@ function SeasonReportGroup({ title, groups }) {
   const hasRows = groups.girls.length || groups.boys.length || groups.unassigned.length
   return (
     <div className="mb-4 last:mb-0">
-      {title && <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">{title}</h4>}
+      {title && <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-1">{title}</h4>}
       {!hasRows ? (
-        <p className="text-sm text-gray-400 py-1">No season results yet.</p>
+        <p className="text-sm text-gray-600 py-1">No season results yet.</p>
       ) : (
         <>
           <SeasonReportSquad label="Girls" rows={groups.girls} />
@@ -527,11 +527,11 @@ export default function Team({ session }) {
     loadTeams()
   }
 
-  if (loading) return <p className="text-center py-8 text-sm text-gray-500">Loading...</p>
+  if (loading) return <p className="text-center py-8 text-sm text-gray-700">Loading...</p>
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
-      <Link to="/" className="text-sm text-gray-500 underline">
+      <Link to="/" className="text-sm text-gray-700 underline">
         &larr; All races
       </Link>
       <h1 className="text-xl font-semibold mt-2 mb-4">Teams</h1>
@@ -615,7 +615,7 @@ export default function Team({ session }) {
       {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
 
       {!activeTeam ? (
-        <p className="text-sm text-gray-400">
+        <p className="text-sm text-gray-600">
           You're not on a team yet. Create one or join one with a team code above.
         </p>
       ) : editing ? (
@@ -669,18 +669,18 @@ export default function Team({ session }) {
             )}
             <h2 className="text-lg font-semibold flex-1">{activeTeam.name}</h2>
             {activeTeam.isOwner && (
-              <button onClick={startEdit} className="text-xs text-gray-500 underline">
+              <button onClick={startEdit} className="text-xs text-gray-700 underline">
                 Edit
               </button>
             )}
           </div>
-          <p className="text-sm text-gray-500 mb-4">
+          <p className="text-sm text-gray-700 mb-4">
             {activeTeam.memberCount} coach{activeTeam.memberCount === 1 ? '' : 'es'} on this team
           </p>
 
           {activeTeam.isOwner && (
             <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 mb-6 flex items-center gap-2">
-              <span className="text-xs text-gray-500">Team code — season-long, share with your staff:</span>
+              <span className="text-xs text-gray-700">Team code — season-long, share with your staff:</span>
               <span className="text-sm font-mono font-semibold tracking-wider">{activeTeam.join_code}</span>
               <button onClick={copyCode} className="text-xs text-gray-700 underline ml-auto">
                 {copied ? 'Copied!' : 'Copy'}
@@ -718,7 +718,7 @@ export default function Team({ session }) {
             <>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-medium text-gray-700">Season races ({races.length})</h3>
-                <button onClick={toggleXcReport} className="text-xs text-gray-500 underline">
+                <button onClick={toggleXcReport} className="text-xs text-gray-700 underline">
                   {showXcReport ? 'Hide season report' : 'Season report'}
                 </button>
               </div>
@@ -726,7 +726,7 @@ export default function Team({ session }) {
               {showXcReport && (
                 <div className="border border-gray-200 rounded-lg px-3 py-3 mb-4 bg-gray-50">
                   {xcReportLoading || !xcReport ? (
-                    <p className="text-sm text-gray-500">Loading season report...</p>
+                    <p className="text-sm text-gray-700">Loading season report...</p>
                   ) : (
                     <SeasonReportGroup groups={xcReport} />
                   )}
@@ -734,7 +734,7 @@ export default function Team({ session }) {
               )}
 
               {races.length === 0 ? (
-                <p className="text-sm text-gray-400">
+                <p className="text-sm text-gray-600">
                   No races yet. When creating a race, choose "{activeTeam.name}" and it'll show up here.
                 </p>
               ) : (
@@ -746,7 +746,7 @@ export default function Team({ session }) {
                         className="block border border-gray-200 rounded-lg px-4 py-3 hover:bg-gray-50"
                       >
                         <div className="font-medium text-sm">{r.name}</div>
-                        <div className="text-xs text-gray-500">
+                        <div className="text-xs text-gray-700">
                           {new Date(r.created_at).toLocaleDateString()} · {r.status}
                         </div>
                       </Link>
@@ -760,10 +760,10 @@ export default function Team({ session }) {
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-medium text-gray-700">Track races ({trackRaces.length})</h3>
                 <div className="flex items-center gap-3">
-                  <button onClick={toggleTrackReport} className="text-xs text-gray-500 underline">
+                  <button onClick={toggleTrackReport} className="text-xs text-gray-700 underline">
                     {showTrackReport ? 'Hide season report' : 'Season report'}
                   </button>
-                  <Link to="/track/roster" className="text-xs text-gray-500 underline">
+                  <Link to="/track/roster" className="text-xs text-gray-700 underline">
                     Track roster
                   </Link>
                 </div>
@@ -772,9 +772,9 @@ export default function Team({ session }) {
               {showTrackReport && (
                 <div className="border border-gray-200 rounded-lg px-3 py-3 mb-4 bg-gray-50">
                   {trackReportLoading || !trackReport ? (
-                    <p className="text-sm text-gray-500">Loading season report...</p>
+                    <p className="text-sm text-gray-700">Loading season report...</p>
                   ) : trackReport.events.length === 0 ? (
-                    <p className="text-sm text-gray-400">No season results yet.</p>
+                    <p className="text-sm text-gray-600">No season results yet.</p>
                   ) : (
                     trackReport.events.map((ev) => (
                       <SeasonReportGroup key={ev.label} title={ev.label} groups={ev} />
@@ -784,7 +784,7 @@ export default function Team({ session }) {
               )}
 
               {trackRaces.length === 0 ? (
-                <p className="text-sm text-gray-400">
+                <p className="text-sm text-gray-600">
                   No track races yet for this team. Create one from the Track tab and choose "{activeTeam.name}".
                 </p>
               ) : (
@@ -796,7 +796,7 @@ export default function Team({ session }) {
                         className="block border border-gray-200 rounded-lg px-4 py-3 hover:bg-gray-50"
                       >
                         <div className="font-medium text-sm">{r.name}</div>
-                        <div className="text-xs text-gray-500">
+                        <div className="text-xs text-gray-700">
                           {new Date(r.created_at).toLocaleDateString()}
                           {r.event_label && <> · {r.event_label}</>} · {r.status}
                         </div>
