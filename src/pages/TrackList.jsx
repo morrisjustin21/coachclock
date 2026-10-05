@@ -100,7 +100,7 @@ export default function TrackList({ session }) {
     <div className="max-w-2xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-xl font-semibold">Track</h1>
-        <Link to="/track/roster" className="text-sm text-gray-500 underline">
+        <Link to="/track/roster" className="text-sm text-gray-700 underline">
           Track roster
         </Link>
       </div>
@@ -132,9 +132,9 @@ export default function TrackList({ session }) {
       {error && <p className="text-sm text-red-600 mb-6">{error}</p>}
 
       {loading ? (
-        <p className="text-sm text-gray-500">Loading...</p>
+        <p className="text-sm text-gray-700">Loading...</p>
       ) : races.length === 0 ? (
-        <p className="text-sm text-gray-500">No track races yet. Create one above.</p>
+        <p className="text-sm text-gray-700">No track races yet. Create one above.</p>
       ) : (
         <ul className="space-y-2">
           {races.map((r) => (
@@ -144,12 +144,12 @@ export default function TrackList({ session }) {
                   <div className="font-medium text-sm flex items-center gap-2">
                     {r.name}
                     {r.team_id && (
-                      <span className="text-[10px] uppercase tracking-wide text-gray-400 border border-gray-200 rounded-full px-1.5 py-0.5">
+                      <span className="text-[10px] uppercase tracking-wide text-gray-600 border border-gray-200 rounded-full px-1.5 py-0.5">
                         {teams.find((t) => t.id === r.team_id)?.name || 'Team'}
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-gray-500">
+                  <div className="text-xs text-gray-700">
                     {new Date(r.created_at).toLocaleDateString()}
                     {r.event_label && <> · {r.event_label}</>} · {r.status}
                   </div>
@@ -157,7 +157,7 @@ export default function TrackList({ session }) {
                 {r.coach_id === session.user.id && (
                   <button
                     onClick={() => deleteRace(r)}
-                    className="text-gray-400 hover:text-red-600 text-sm px-2"
+                    className="text-gray-600 hover:text-red-600 text-sm px-2"
                     aria-label={`Delete ${r.name}`}
                   >
                     ✕
