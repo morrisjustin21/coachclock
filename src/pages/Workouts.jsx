@@ -98,11 +98,11 @@ export default function Workouts({ session }) {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
-      <Link to="/" className="text-sm text-gray-500 underline">
+      <Link to="/" className="text-sm text-gray-700 underline">
         &larr; All races
       </Link>
       <h1 className="text-xl font-semibold mt-2 mb-1">Practice</h1>
-      <p className="text-sm text-gray-500 mb-6">Time practice sessions — interval repeats or a continuous run with splits.</p>
+      <p className="text-sm text-gray-700 mb-6">Time practice sessions — interval repeats or a continuous run with splits.</p>
 
       <form onSubmit={createWorkout} className="space-y-3 mb-8 border border-gray-200 rounded-lg p-4">
         <input
@@ -122,7 +122,7 @@ export default function Workouts({ session }) {
             }`}
           >
             Intervals / repeats
-            <div className={`text-xs font-normal mt-0.5 ${mode === 'intervals' ? 'text-gray-300' : 'text-gray-400'}`}>
+            <div className={`text-xs font-normal mt-0.5 ${mode === 'intervals' ? 'text-gray-300' : 'text-gray-600'}`}>
               Clock resets each rep, e.g. 6x800m
             </div>
           </button>
@@ -134,7 +134,7 @@ export default function Workouts({ session }) {
             }`}
           >
             Continuous run
-            <div className={`text-xs font-normal mt-0.5 ${mode === 'continuous' ? 'text-gray-300' : 'text-gray-400'}`}>
+            <div className={`text-xs font-normal mt-0.5 ${mode === 'continuous' ? 'text-gray-300' : 'text-gray-600'}`}>
               One clock with splits, e.g. a progression run
             </div>
           </button>
@@ -161,7 +161,7 @@ export default function Workouts({ session }) {
         )}
 
         {mode === 'continuous' && (
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-gray-700">
             You'll add checkpoints (like mile markers) on the next screen, same as setting up a race.
           </p>
         )}
@@ -189,9 +189,9 @@ export default function Workouts({ session }) {
       {error && <p className="text-sm text-red-600 mb-4">{error}</p>}
 
       {loading ? (
-        <p className="text-sm text-gray-500">Loading...</p>
+        <p className="text-sm text-gray-700">Loading...</p>
       ) : workouts.length === 0 ? (
-        <p className="text-sm text-gray-500">No workouts yet.</p>
+        <p className="text-sm text-gray-700">No workouts yet.</p>
       ) : (
         <ul className="space-y-2">
           {workouts.map((w) => (
@@ -199,14 +199,14 @@ export default function Workouts({ session }) {
               <Link to={`/workout/${w.id}`} className="flex-1 hover:opacity-70">
                 <div className="font-medium text-sm flex items-center gap-2">
                   {w.name}
-                  {w.rep_label && <span className="text-gray-400 font-normal"> · {w.rep_label}</span>}
+                  {w.rep_label && <span className="text-gray-600 font-normal"> · {w.rep_label}</span>}
                   {w.team_id && (
-                    <span className="text-[10px] uppercase tracking-wide text-gray-400 border border-gray-200 rounded-full px-1.5 py-0.5">
+                    <span className="text-[10px] uppercase tracking-wide text-gray-600 border border-gray-200 rounded-full px-1.5 py-0.5">
                       {teams.find((t) => t.id === w.team_id)?.name || 'Team'}
                     </span>
                   )}
                 </div>
-                <div className="text-xs text-gray-500">
+                <div className="text-xs text-gray-700">
                   {new Date(w.created_at).toLocaleDateString()} · {w.status} ·{' '}
                   {w.mode === 'continuous'
                     ? 'continuous run'
@@ -218,7 +218,7 @@ export default function Workouts({ session }) {
               {w.coach_id === session.user.id && (
                 <button
                   onClick={() => deleteWorkout(w)}
-                  className="text-gray-400 hover:text-red-600 text-sm px-2"
+                  className="text-gray-600 hover:text-red-600 text-sm px-2"
                   aria-label={`Delete ${w.name}`}
                 >
                   ✕
