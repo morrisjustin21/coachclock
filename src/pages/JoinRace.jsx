@@ -46,11 +46,11 @@ export default function JoinRace({ session }) {
 
   return (
     <div className="max-w-sm mx-auto px-4 py-8">
-      <Link to="/" className="text-sm text-gray-500 underline">
+      <Link to="/" className="text-sm text-gray-700 underline">
         &larr; All races
       </Link>
       <h1 className="text-xl font-semibold mt-2 mb-1">Join a race</h1>
-      <p className="text-sm text-gray-500 mb-6">
+      <p className="text-sm text-gray-700 mb-6">
         Ask the head coach for their race's join code, then enter it below.
       </p>
 
