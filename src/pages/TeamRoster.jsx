@@ -590,4 +590,3 @@ export default function TeamRoster({ session }) {
     </div>
   )
 }
-
