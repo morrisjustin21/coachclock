@@ -28,7 +28,7 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-sm bg-white rounded-xl border border-gray-200 p-6">
         <h1 className="text-xl font-semibold mb-1">Coach's Clock</h1>
-        <p className="text-sm text-gray-500 mb-6">
+        <p className="text-sm text-gray-700 mb-6">
           {mode === 'signin' ? 'Sign in to your coach account' : 'Create a coach account'}
         </p>
         <form onSubmit={handleSubmit} className="space-y-3">
@@ -57,7 +57,7 @@ export default function Login() {
         </form>
         <button
           onClick={() => setMode(mode === 'signin' ? 'signup' : 'signin')}
-          className="mt-4 text-sm text-gray-500 underline"
+          className="mt-4 text-sm text-gray-700 underline"
         >
           {mode === 'signin' ? "Need an account? Sign up" : 'Already have an account? Sign in'}
         </button>
