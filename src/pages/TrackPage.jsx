@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { formatTime } from '../lib/csv'
+import LiveClock from '../components/LiveClock'
+import ClockButton from '../components/ClockButton'
+import KeepAwake from '../components/KeepAwake'
 import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
 
 const EVENT_PRESETS = [
@@ -131,11 +134,11 @@ export default function TrackPage({ session }) {
     if (data) setSplits(data)
   }
 
-  if (loading || !race) return <p className="text-center py-8 text-sm text-gray-500">Loading...</p>
+  if (loading || !race) return <p className="text-center py-8 text-sm text-gray-700">Loading...</p>
 
   return (
     <div className="max-w-lg mx-auto px-4 py-8">
-      <Link to="/track" className="text-sm text-gray-500 underline">
+      <Link to="/track" className="text-sm text-gray-700 underline">
         &larr; All track races
       </Link>
       <h1 className="text-xl font-semibold mt-2 mb-1">{race.name}</h1>
@@ -303,7 +306,7 @@ function TrackSetup({ race, rosterAthletes, onStarted }) {
       <div>
         <label className="text-sm font-medium text-gray-700 block mb-1">Athletes in this race</label>
         {rosterAthletes.length === 0 ? (
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-gray-600">
             No athletes on your track roster yet.{' '}
             <Link to="/track/roster" className="underline">
               Add some
@@ -329,7 +332,7 @@ function TrackSetup({ race, rosterAthletes, onStarted }) {
             ))}
           </ul>
         )}
-        <p className="text-xs text-gray-400 mt-1">Goal time is optional - only athletes with one get a live pace panel.</p>
+        <p className="text-xs text-gray-600 mt-1">Goal time is optional - only athletes with one get a live pace panel.</p>
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
@@ -353,27 +356,12 @@ function originalTargetCumulative(checkpoint, goalMs, totalDistance) {
 function TrackLive({ race, raceAthletes, checkpoints, splits, isOwner }) {
   const sortedCheckpoints = [...checkpoints].sort((a, b) => a.sort_order - b.sort_order)
   const [activeCheckpointId, setActiveCheckpointId] = useState(null)
-  const rafRef = useRef(null)
 
   const [localRace, setLocalRace] = useState(race)
-  const [elapsed, setElapsed] = useState(computeElapsed(race))
 
   useEffect(() => {
     setLocalRace(race)
   }, [race.running, race.started_at, race.accumulated_ms])
-
-  useEffect(() => {
-    cancelAnimationFrame(rafRef.current)
-    setElapsed(computeElapsed(localRace))
-    if (localRace.running) {
-      function loop() {
-        setElapsed(computeElapsed(localRace))
-        rafRef.current = requestAnimationFrame(loop)
-      }
-      rafRef.current = requestAnimationFrame(loop)
-    }
-    return () => cancelAnimationFrame(rafRef.current)
-  }, [localRace.running, localRace.started_at, localRace.accumulated_ms])
 
   useEffect(() => {
     if (!activeCheckpointId && sortedCheckpoints.length > 0) setActiveCheckpointId(sortedCheckpoints[0].id)
@@ -574,44 +562,48 @@ function TrackLive({ race, raceAthletes, checkpoints, splits, isOwner }) {
   return (
     <div>
       <div className="text-center py-4">
-        <div className="text-5xl font-semibold tabular-nums">{formatTime(elapsed)}</div>
-        {race.event_label && <div className="text-xs text-gray-400 mt-1">{race.event_label}</div>}
+        <LiveClock clock={localRace} className="text-6xl font-bold tabular-nums" />
+        {race.event_label && <div className="text-xs text-gray-600 mt-1">{race.event_label}</div>}
       </div>
 
       {isOwner && (
-        <div className="flex gap-2 justify-center mb-4">
-          <button onClick={handleStartStop} className="min-w-[100px] border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium">
-            {localRace.running ? 'Stop' : elapsed > 0 ? 'Resume' : 'Start'}
-          </button>
+        <div className="flex flex-wrap gap-3 justify-center items-center mb-3">
+          <ClockButton
+            running={localRace.running}
+            hasTime={(localRace.accumulated_ms || 0) > 0}
+            onClick={handleStartStop}
+          />
           <button onClick={resetRace} className="border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm font-medium">
             Reset race
           </button>
         </div>
       )}
 
+      {isOwner && <KeepAwake active={!!localRace.running} />}
+
       {goalRows.length > 0 && (
         <div className="mb-5">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Goal pace</h2>
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-700 mb-2">Goal pace</h2>
           <ul className="space-y-2">
             {goalRows.map((row) => (
               <li key={row.athlete.id} className="border border-gray-200 rounded-lg px-3 py-2">
                 <div className="flex items-center justify-between text-sm font-medium">
                   <span>{row.athlete.name}</span>
-                  <span className="text-xs text-gray-400">Goal {formatTime(row.athlete.goal_time_ms)}</span>
+                  <span className="text-xs text-gray-600">Goal {formatTime(row.athlete.goal_time_ms)}</span>
                 </div>
                 {row.finished ? (
                   <div className={`text-xs mt-1 ${row.diff <= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                     {row.diff <= 0 ? `Hit goal, ${formatTime(Math.abs(row.diff))} to spare` : `Missed goal by ${formatTime(row.diff)}`}
                   </div>
                 ) : row.noNextCheckpoint ? (
-                  <div className="text-xs text-gray-400 mt-1">No checkpoints remaining</div>
+                  <div className="text-xs text-gray-600 mt-1">No checkpoints remaining</div>
                 ) : (
                   <div className={`text-xs mt-1 ${row.unrealistic ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
                     {row.goalReachable ? (
                       <>
                         Needs <span className="font-semibold">{formatTime(row.requiredSegmentMs)}</span> to {row.nextCheckpoint.label}
                         {row.originalTargetSegmentMs != null && (
-                          <span className="text-gray-400"> (target was {formatTime(row.originalTargetSegmentMs)})</span>
+                          <span className="text-gray-600"> (target was {formatTime(row.originalTargetSegmentMs)})</span>
                         )}
                         {row.unrealistic && <span className="block">Faster than anything they've run so far this race</span>}
                       </>
@@ -653,7 +645,7 @@ function TrackLive({ race, raceAthletes, checkpoints, splits, isOwner }) {
               Undo
             </button>
           </div>
-          <p className="text-xs text-gray-400 mb-2">Tap a name below as each runner reaches this point</p>
+          <p className="text-xs text-gray-600 mb-2">Tap a name below as each runner reaches this point</p>
 
           {queueCount > 0 && (
             <div className="flex items-center justify-between bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mb-3 text-xs text-yellow-800">
@@ -666,14 +658,14 @@ function TrackLive({ race, raceAthletes, checkpoints, splits, isOwner }) {
 
           <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6">
             {waiting.length === 0 ? (
-              <li className="px-3 py-3 text-sm text-gray-400">Everyone has come through.</li>
+              <li className="px-3 py-3 text-sm text-gray-600">Everyone has come through.</li>
             ) : (
               waiting.map((a) => (
                 <li key={a.id}>
                   <button
                     onClick={() => recordFinish(a)}
                     disabled={!localRace.running}
-                    className="w-full text-left px-3 py-3 text-sm hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+                    className="w-full text-left px-3 py-4 text-base font-medium hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
                   >
                     {a.name}
                   </button>
@@ -691,14 +683,14 @@ function TrackLive({ race, raceAthletes, checkpoints, splits, isOwner }) {
       </div>
       <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100">
         {finishedInOrder.length === 0 ? (
-          <li className="px-3 py-3 text-sm text-gray-400">No times yet.</li>
+          <li className="px-3 py-3 text-sm text-gray-600">No times yet.</li>
         ) : (
           finishedInOrder.map((s, i) => {
             const athlete = raceAthletes.find((a) => a.id === s.athlete_id)
             return (
               <li key={s.id} className="flex items-center justify-between px-3 py-2 text-sm">
                 <span>
-                  <span className="text-gray-400 mr-2">{i + 1}.</span>
+                  <span className="text-gray-600 mr-2">{i + 1}.</span>
                   {athlete?.name || 'Athlete'}
                 </span>
                 <span className="tabular-nums font-medium">{formatTime(s.recorded_time_ms)}</span>
