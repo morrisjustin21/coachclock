@@ -21,12 +21,12 @@ function PendingScreen({ status }) {
       <h1 className="text-lg font-semibold mb-2">
         {status === 'blocked' ? 'Account not available' : "You're almost in"}
       </h1>
-      <p className="text-sm text-gray-500 mb-6">
+      <p className="text-sm text-gray-700 mb-6">
         {status === 'blocked'
           ? "This account doesn't have access to Coach's Clock. Reach out if you think that's a mistake."
           : "Your account is created, but Coach's Clock is invite-only right now. Text Justin at (580) 736-5225 to get your team activated."}
       </p>
-      <button onClick={() => supabase.auth.signOut()} className="text-sm text-gray-500 underline">
+      <button onClick={() => supabase.auth.signOut()} className="text-sm text-gray-700 underline">
         Sign out
       </button>
     </div>
@@ -84,7 +84,7 @@ export default function App() {
   }
 
   if (loading || (session && !accessStatus)) {
-    return <p className="text-center py-8 text-sm text-gray-500">Loading...</p>
+    return <p className="text-center py-8 text-sm text-gray-700">Loading...</p>
   }
 
   return (
