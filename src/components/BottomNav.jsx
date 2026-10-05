@@ -105,7 +105,7 @@ export default function BottomNav() {
             key={tab.key}
             to={tab.to}
             className={`flex-1 flex flex-col items-center gap-0.5 pt-1.5 pb-2 text-[10px] font-medium ${
-              active ? 'text-gray-900' : 'text-gray-400'
+              active ? 'text-gray-900' : 'text-gray-600'
             }`}
           >
             <tab.Icon />
