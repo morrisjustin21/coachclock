@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { formatTime, downloadCSV } from '../lib/csv'
+import LiveClock from '../components/LiveClock'
+import ClockButton from '../components/ClockButton'
+import KeepAwake from '../components/KeepAwake'
 import ExcelJS from 'exceljs'
 import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
@@ -145,12 +148,12 @@ export default function RacePage({ session }) {
     if (data) setSplits(data)
   }
 
-  if (loading || !race) return <p className="text-center py-8 text-sm text-gray-500">Loading...</p>
+  if (loading || !race) return <p className="text-center py-8 text-sm text-gray-700">Loading...</p>
 
   return (
     <div className="max-w-lg mx-auto px-4 py-8">
       {session && (
-        <Link to="/" className="text-sm text-gray-500 underline">
+        <Link to="/" className="text-sm text-gray-700 underline">
           &larr; All races
         </Link>
       )}
@@ -159,7 +162,7 @@ export default function RacePage({ session }) {
       {canRecord && race.status !== 'setup' && (
         <button
           onClick={() => setShowCheckin((v) => !v)}
-          className="text-xs text-gray-500 underline mb-4"
+          className="text-xs text-gray-700 underline mb-4"
         >
           {showCheckin ? '← Back to race' : 'Check-in sheet'}
         </button>
@@ -216,17 +219,17 @@ function SortableRosterRow({ item, index, onRemove }) {
 
   return (
     <li ref={setNodeRef} style={style} className="flex items-center gap-2 px-3 py-2 text-sm bg-white">
-      <span className="text-gray-400 w-5">{index + 1}</span>
+      <span className="text-gray-600 w-5">{index + 1}</span>
       <button
         {...attributes}
         {...listeners}
-        className="text-gray-400 cursor-grab active:cursor-grabbing px-1 touch-none"
+        className="text-gray-600 cursor-grab active:cursor-grabbing px-1 touch-none"
         aria-label="Drag to reorder"
       >
         ⠿
       </button>
       <span className="flex-1">{item.name}</span>
-      <button onClick={() => onRemove(item.key)} className="text-gray-400 hover:text-red-600 px-1" aria-label="Remove">
+      <button onClick={() => onRemove(item.key)} className="text-gray-600 hover:text-red-600 px-1" aria-label="Remove">
         ✕
       </button>
     </li>
@@ -455,14 +458,14 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
   return (
     <div>
       <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 mb-6 flex items-center gap-2">
-        <span className="text-xs text-gray-500">Share this code so other coaches can join:</span>
+        <span className="text-xs text-gray-700">Share this code so other coaches can join:</span>
         <span className="text-sm font-mono font-semibold tracking-wider">{race.join_code}</span>
-        <button onClick={copyCode} className="text-xs text-gray-500 underline ml-auto">
+        <button onClick={copyCode} className="text-xs text-gray-700 underline ml-auto">
           {copied ? 'Copied!' : 'Copy'}
         </button>
       </div>
 
-      <p className="text-sm text-gray-500 mb-4">
+      <p className="text-sm text-gray-700 mb-4">
         Pick who's running this race, then arrange your expected finish order.
       </p>
 
@@ -470,7 +473,7 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
         <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-medium text-gray-700">Team roster</h2>
-            <button onClick={toggleSelectAll} className="text-xs text-gray-500 underline">
+            <button onClick={toggleSelectAll} className="text-xs text-gray-700 underline">
               {allTeamSelected ? 'Deselect all' : 'Select all'}
             </button>
           </div>
@@ -480,7 +483,7 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
                 <input type="checkbox" checked={isSelected(a.id)} onChange={() => toggleTeamAthlete(a)} />
                 <span>
                   {a.name}
-                  {a.bib && <span className="text-gray-400 ml-2">#{a.bib}</span>}
+                  {a.bib && <span className="text-gray-600 ml-2">#{a.bib}</span>}
                 </span>
               </label>
             ))}
@@ -501,9 +504,9 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
 
       <h2 className="text-sm font-medium text-gray-700 mb-2">Expected finish order ({roster.length})</h2>
       {roster.length === 0 ? (
-        <p className="text-sm text-gray-400 mb-6">Select athletes above to build the order.</p>
+        <p className="text-sm text-gray-600 mb-6">Select athletes above to build the order.</p>
       ) : (
-        <p className="text-xs text-gray-400 mb-2">
+        <p className="text-xs text-gray-600 mb-2">
           {Object.keys(predictedTimes).length > 0
             ? 'Auto-sorted by each runner\'s most recent finish time — drag the ⠿ handle to adjust'
             : 'Drag the ⠿ handle to reorder'}
@@ -522,7 +525,7 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
       )}
 
       <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>
-      <p className="text-xs text-gray-500 mb-2">
+      <p className="text-xs text-gray-700 mb-2">
         Optional. Add a checkpoint for every spot on the course a coach will be timing from, in
         order. Leave empty for a simple single finish-line race.
       </p>
@@ -557,12 +560,12 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
         <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6">
           {checkpointList.map((c, i) => (
             <li key={c.key} className="flex items-center gap-2 px-3 py-2 text-sm">
-              <span className="text-gray-400 w-5">{i + 1}</span>
+              <span className="text-gray-600 w-5">{i + 1}</span>
               <span className="flex-1">{c.label}</span>
               <button
                 onClick={() => moveCheckpoint(i, -1)}
                 disabled={i === 0}
-                className="text-gray-400 disabled:opacity-30 px-1"
+                className="text-gray-600 disabled:opacity-30 px-1"
                 aria-label="Move up"
               >
                 ↑
@@ -570,14 +573,14 @@ function RaceSetup({ race, teamAthletes, onStarted, session }) {
               <button
                 onClick={() => moveCheckpoint(i, 1)}
                 disabled={i === checkpointList.length - 1}
-                className="text-gray-400 disabled:opacity-30 px-1"
+                className="text-gray-600 disabled:opacity-30 px-1"
                 aria-label="Move down"
               >
                 ↓
               </button>
               <button
                 onClick={() => removeCheckpoint(c.key)}
-                className="text-gray-400 hover:text-red-600 px-1"
+                className="text-gray-600 hover:text-red-600 px-1"
                 aria-label="Remove"
               >
                 ✕
@@ -628,27 +631,12 @@ function computeElapsed(raceLike) {
 function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord, session, onViewReport }) {
   const sortedCheckpoints = [...checkpoints].sort((a, b) => a.sort_order - b.sort_order)
   const [activeCheckpointId, setActiveCheckpointId] = useState(null)
-  const rafRef = useRef(null)
 
   const [localRace, setLocalRace] = useState(race)
-  const [elapsed, setElapsed] = useState(computeElapsed(race))
 
   useEffect(() => {
     setLocalRace(race)
   }, [race.running, race.started_at, race.accumulated_ms])
-
-  useEffect(() => {
-    cancelAnimationFrame(rafRef.current)
-    setElapsed(computeElapsed(localRace))
-    if (localRace.running) {
-      function loop() {
-        setElapsed(computeElapsed(localRace))
-        rafRef.current = requestAnimationFrame(loop)
-      }
-      rafRef.current = requestAnimationFrame(loop)
-    }
-    return () => cancelAnimationFrame(rafRef.current)
-  }, [localRace.running, localRace.started_at, localRace.accumulated_ms])
 
   useEffect(() => {
     if (!activeCheckpointId && sortedCheckpoints.length > 0) {
@@ -891,7 +879,7 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
     <div>
       {isOwner && (
         <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2 mb-2">
-          <span className="text-xs text-gray-500">Coach join code:</span>
+          <span className="text-xs text-gray-700">Coach join code:</span>
           <span className="text-sm font-mono font-semibold tracking-wider">{race.join_code}</span>
         </div>
       )}
@@ -899,7 +887,7 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
       {canRecord && (
         <div className="space-y-2 mb-4">
           <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 flex items-center gap-2">
-            <span className="text-xs text-gray-500">Results link for parents &amp; fans:</span>
+            <span className="text-xs text-gray-700">Results link for parents &amp; fans:</span>
             <button onClick={copyResultsLink} className="text-xs text-gray-700 underline ml-auto">
               {linkCopied ? 'Copied!' : 'Copy link'}
             </button>
@@ -912,21 +900,23 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
               <img src={qrSrc} alt="QR code linking to live race results" width={180} height={180} />
             </div>
           )}
-          <p className="text-xs text-gray-400 px-1">
+          <p className="text-xs text-gray-600 px-1">
             Anyone with this link or QR code can view live results — no account needed, and they can't record times.
           </p>
         </div>
       )}
 
       <div className="text-center py-4">
-        <div className="text-5xl font-semibold tabular-nums">{formatTime(elapsed)}</div>
+        <LiveClock clock={localRace} className="text-6xl font-bold tabular-nums" />
       </div>
 
       {canRecord && (
-        <div className="flex gap-2 justify-center mb-4">
-          <button onClick={handleStartStop} className="min-w-[100px] border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium">
-            {localRace.running ? 'Stop' : elapsed > 0 ? 'Resume' : 'Start'}
-          </button>
+        <div className="flex flex-wrap gap-3 justify-center items-center mb-3">
+          <ClockButton
+            running={localRace.running}
+            hasTime={(localRace.accumulated_ms || 0) > 0}
+            onClick={handleStartStop}
+          />
           {isOwner && (
             <button
               onClick={resetRace}
@@ -937,6 +927,8 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
           )}
         </div>
       )}
+
+      {canRecord && <KeepAwake active={!!localRace.running} />}
 
       {sortedCheckpoints.length > 1 && (
         <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
@@ -971,7 +963,7 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
               Undo
             </button>
           </div>
-          <p className="text-xs text-gray-400 mb-2">Tap a name below as each runner reaches this point</p>
+          <p className="text-sm text-gray-700 mb-2">Tap a name below as each runner reaches this point</p>
 
           {queueCount > 0 && (
             <div className="flex items-center justify-between bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mb-3 text-xs text-yellow-800">
@@ -987,17 +979,17 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
 
           <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6">
             {waiting.length === 0 ? (
-              <li className="px-3 py-3 text-sm text-gray-400">Everyone has come through.</li>
+              <li className="px-3 py-3 text-sm text-gray-600">Everyone has come through.</li>
             ) : (
               waiting.map((a) => (
                 <li key={a.id}>
                   <button
                     onClick={() => recordFinish(a)}
                     disabled={!localRace.running}
-                    className="w-full text-left px-3 py-3 text-sm hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+                    className="w-full text-left px-3 py-4 text-base font-medium hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
                   >
                     {a.name}
-                    {a.bib && <span className="text-gray-400 ml-2">#{a.bib}</span>}
+                    {a.bib && <span className="text-gray-600 ml-2">#{a.bib}</span>}
                   </button>
                 </li>
               ))
@@ -1007,7 +999,7 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
       )}
 
       {!canRecord && session && (
-        <p className="text-xs text-gray-400 mb-4">
+        <p className="text-xs text-gray-600 mb-4">
           Helping time this race?{' '}
           <Link to="/join" className="underline">
             Enter the join code
@@ -1021,20 +1013,20 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
           {activeCheckpoint?.label || 'Results'} ({finishedInOrder.length})
         </h2>
         {finishedInOrder.length > 0 && (
-          <button onClick={() => downloadCSV(`${race.name} - ${activeCheckpoint?.label}`, finishedInOrder)} className="text-xs text-gray-500 underline">
+          <button onClick={() => downloadCSV(`${race.name} - ${activeCheckpoint?.label}`, finishedInOrder)} className="text-xs text-gray-700 underline">
             Export CSV
           </button>
         )}
       </div>
 
       {finishedInOrder.length === 0 ? (
-        <p className="text-sm text-gray-400 mb-6">No times recorded yet at this checkpoint.</p>
+        <p className="text-sm text-gray-600 mb-6">No times recorded yet at this checkpoint.</p>
       ) : (
         <table className="w-full text-sm mb-6">
           <tbody>
             {finishedInOrder.map((s, i) => (
               <tr key={s.id} className="border-b border-gray-100">
-                <td className="py-2 text-gray-400 w-8">{i + 1}</td>
+                <td className="py-2 text-gray-600 w-8">{i + 1}</td>
                 <td className="py-2">
                   {s.label}
                   {isNewPR(s, activeCheckpoint?.label) && (
@@ -1055,7 +1047,7 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
       </button>
 
       {!session && (
-        <p className="text-xs text-gray-400 mt-6">Live results — this page updates automatically as finishers are recorded.</p>
+        <p className="text-xs text-gray-600 mt-6">Live results — this page updates automatically as finishers are recorded.</p>
       )}
     </div>
   )
@@ -1227,7 +1219,7 @@ function groupSortedByFinishTime(rows) {
 
 function fmtDiff(ms) {
   if (ms == null) return { text: '—', cls: 'text-gray-300' }
-  if (ms === 0) return { text: formatTime(0), cls: 'text-gray-400' }
+  if (ms === 0) return { text: formatTime(0), cls: 'text-gray-600' }
   const sign = ms < 0 ? '-' : '+'
   return { text: `${sign}${formatTime(Math.abs(ms))}`, cls: ms < 0 ? 'text-emerald-600 font-semibold' : 'text-red-600 font-semibold' }
 }
@@ -1482,20 +1474,20 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
         }
       `}</style>
 
-      <button onClick={onBack} className="text-sm text-gray-500 underline mb-4 print:hidden">
+      <button onClick={onBack} className="text-sm text-gray-700 underline mb-4 print:hidden">
         &larr; Back to race
       </button>
 
       <div className="flex items-center justify-between mb-4 print:hidden">
         <h2 className="text-lg font-semibold">Full report</h2>
         <div className="flex items-center gap-3">
-          <button onClick={() => window.print()} className="text-xs text-gray-500 underline">
+          <button onClick={() => window.print()} className="text-xs text-gray-700 underline">
             Print
           </button>
-          <button onClick={() => downloadSplitSheetXLSX(race, team, columns, groups)} className="text-xs text-gray-500 underline">
+          <button onClick={() => downloadSplitSheetXLSX(race, team, columns, groups)} className="text-xs text-gray-700 underline">
             Download Excel
           </button>
-          <button onClick={() => downloadSplitSheetCSV(race, columns, groups)} className="text-xs text-gray-400 underline">
+          <button onClick={() => downloadSplitSheetCSV(race, columns, groups)} className="text-xs text-gray-600 underline">
             Download CSV
           </button>
         </div>
@@ -1508,7 +1500,7 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
         )}
         <div>
           <div className="text-base font-extrabold leading-tight">{team ? team.name : race.name}</div>
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-gray-700">
             Split Sheet Report
             {team && <> · {race.name}</>} ·{' '}
             {new Date(race.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
@@ -1561,16 +1553,16 @@ function RaceReport({ race, team, raceAthletes, checkpoints, splits, onBack }) {
                 </tr>
                 <tr>
                   {columns.map((c, idx) => (
-                    <th key={idx} className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">
+                    <th key={idx} className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-700 text-xs print:text-[9.5px]">
                       {c.sub}
                     </th>
                   ))}
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Time</th>
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Diff</th>
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Time</th>
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Diff</th>
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Time</th>
-                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-500 text-xs print:text-[9.5px]">Diff</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-700 text-xs print:text-[9.5px]">Time</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-700 text-xs print:text-[9.5px]">Diff</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-700 text-xs print:text-[9.5px]">Time</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-700 text-xs print:text-[9.5px]">Diff</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-700 text-xs print:text-[9.5px]">Time</th>
+                  <th className="py-1 px-1 border border-gray-300 bg-gray-100 font-normal text-gray-700 text-xs print:text-[9.5px]">Diff</th>
                 </tr>
               </thead>
               <tbody>
@@ -1690,18 +1682,18 @@ function RaceCheckin({ raceAthletes }) {
   return (
     <div>
       <h2 className="text-lg font-semibold mb-1">Check-in sheet</h2>
-      <p className="text-sm text-gray-500 mb-4">
+      <p className="text-sm text-gray-700 mb-4">
         Tap a name to cycle: not here → checked in → checked out. Tap again to reset.
       </p>
 
       <div className="flex gap-4 text-sm mb-4">
-        <span className="text-gray-500">
+        <span className="text-gray-700">
           <span className="font-semibold text-gray-900">{inCount}</span> in
         </span>
-        <span className="text-gray-500">
+        <span className="text-gray-700">
           <span className="font-semibold text-gray-900">{outCount}</span> out
         </span>
-        <span className="text-gray-500">
+        <span className="text-gray-700">
           <span className="font-semibold text-gray-900">{noneCount}</span> not yet
         </span>
       </div>
@@ -1713,7 +1705,7 @@ function RaceCheckin({ raceAthletes }) {
             <li key={a.id}>
               <button onClick={() => cycle(a)} className="w-full flex items-center justify-between px-3 py-3 text-sm hover:bg-gray-50">
                 <span>{a.name}</span>
-                {state === 'none' && <span className="text-xs text-gray-400">Not here</span>}
+                {state === 'none' && <span className="text-xs text-gray-600">Not here</span>}
                 {state === 'in' && (
                   <span className="text-xs font-medium text-green-700 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
                     In {new Date(a.checked_in_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
