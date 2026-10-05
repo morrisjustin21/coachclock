@@ -5,6 +5,7 @@ import { formatTime } from '../lib/csv'
 import LiveClock from '../components/LiveClock'
 import ClockButton from '../components/ClockButton'
 import KeepAwake from '../components/KeepAwake'
+import SessionEditor, { workoutEditorConfig } from '../components/SessionEditor'
 import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
 
 const CHECKPOINT_PRESETS = ['1000m', '2000m', '3000m', '4000m', '1mi', '2mi', '3mi', 'Finish']
@@ -18,6 +19,7 @@ export default function WorkoutPage({ session }) {
   const [reps, setReps] = useState([]) // used as either "reps" (intervals) or "checkpoints" (continuous)
   const [splits, setSplits] = useState([])
   const [loading, setLoading] = useState(true)
+  const [showEdit, setShowEdit] = useState(false)
 
   const isOwner = session && workout && workout.coach_id === session.user.id
 
@@ -117,26 +119,52 @@ export default function WorkoutPage({ session }) {
         <WorkoutSetup workout={workout} teamAthletes={teamAthletes} onStarted={loadAll} />
       )}
 
-      {workout.status !== 'setup' && workout.mode === 'continuous' && (
-        <ContinuousWorkoutLive
-          workout={workout}
-          team={team}
-          workoutAthletes={workoutAthletes}
-          checkpoints={reps}
+      {isOwner && workout.status !== 'setup' && (
+        <button onClick={() => setShowEdit((v) => !v)} className="text-xs text-gray-700 underline mb-4">
+          {showEdit
+            ? '← Back to workout'
+            : `Edit athletes & ${workout.mode === 'continuous' ? 'checkpoints' : 'reps'}`}
+        </button>
+      )}
+
+      {isOwner && workout.status !== 'setup' && showEdit && (
+        <SessionEditor
+          config={workoutEditorConfig(workout)}
+          athletes={workoutAthletes}
+          items={reps}
           splits={splits}
-          isOwner={isOwner}
+          rosterAthletes={teamAthletes}
+          onChanged={() => {
+            loadWorkoutAthletes()
+            loadReps()
+            loadSplits()
+          }}
         />
       )}
 
-      {workout.status !== 'setup' && workout.mode !== 'continuous' && (
-        <IntervalWorkoutLive
-          workout={workout}
-          team={team}
-          workoutAthletes={workoutAthletes}
-          reps={reps}
-          splits={splits}
-          isOwner={isOwner}
-        />
+      {/* Kept mounted (just hidden) while editing so the clock and offline sync keep running */}
+      {workout.status !== 'setup' && (
+        <div className={showEdit ? 'hidden' : ''}>
+          {workout.mode === 'continuous' ? (
+            <ContinuousWorkoutLive
+              workout={workout}
+              team={team}
+              workoutAthletes={workoutAthletes}
+              checkpoints={reps}
+              splits={splits}
+              isOwner={isOwner}
+            />
+          ) : (
+            <IntervalWorkoutLive
+              workout={workout}
+              team={team}
+              workoutAthletes={workoutAthletes}
+              reps={reps}
+              splits={splits}
+              isOwner={isOwner}
+            />
+          )}
+        </div>
       )}
     </div>
   )
@@ -795,6 +823,13 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
       setActiveCheckpointId(sortedCheckpoints[0].id)
     }
   }, [checkpoints.length])
+
+  // If the active checkpoint was removed in the editor, fall back to the first one
+  useEffect(() => {
+    if (activeCheckpointId && !checkpoints.some((c) => c.id === activeCheckpointId)) {
+      setActiveCheckpointId(sortedCheckpoints[0]?.id ?? null)
+    }
+  }, [checkpoints])
 
   const [localWorkout, setLocalWorkout] = useState(workout)
 
