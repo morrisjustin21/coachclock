@@ -243,11 +243,11 @@ export default function TeamRoster({ session }) {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
-      <Link to="/" className="text-sm text-gray-500 underline">
+      <Link to="/" className="text-sm text-gray-700 underline">
         &larr; All races
       </Link>
       <h1 className="text-xl font-semibold mt-2 mb-1">Roster</h1>
-      <p className="text-sm text-gray-500 mb-4">
+      <p className="text-sm text-gray-700 mb-4">
         Build this once, then pick from it when setting up each race.
       </p>
 
@@ -338,7 +338,7 @@ export default function TeamRoster({ session }) {
           </form>
 
           <details className="mb-6">
-            <summary className="text-sm text-gray-500 cursor-pointer">
+            <summary className="text-sm text-gray-700 cursor-pointer">
               Or paste a whole list at once
             </summary>
             <form onSubmit={addBulk} className="mt-2 space-y-2">
@@ -363,7 +363,7 @@ export default function TeamRoster({ session }) {
       )}
 
       {!canEdit && (
-        <p className="text-xs text-gray-400 mb-4">
+        <p className="text-xs text-gray-600 mb-4">
           Read-only view of everyone's athletes on this team. Switch to "My roster" to add or remove your own.
         </p>
       )}
@@ -398,7 +398,7 @@ export default function TeamRoster({ session }) {
       )}
 
       <div className="flex flex-wrap gap-2 mb-4 items-center">
-        <span className="text-xs text-gray-400 mr-1">Filter:</span>
+        <span className="text-xs text-gray-600 mr-1">Filter:</span>
         <button
           onClick={() => setGenderFilter('all')}
           className={`text-xs px-3 py-1 rounded-full border ${
@@ -438,9 +438,9 @@ export default function TeamRoster({ session }) {
       </div>
 
       {loading ? (
-        <p className="text-sm text-gray-500">Loading...</p>
+        <p className="text-sm text-gray-700">Loading...</p>
       ) : filtered.length === 0 ? (
-        <p className="text-sm text-gray-400">No athletes match this filter.</p>
+        <p className="text-sm text-gray-600">No athletes match this filter.</p>
       ) : (
         <div className="space-y-6">
           {genderOrder.map((genderKey) => (
@@ -450,7 +450,7 @@ export default function TeamRoster({ session }) {
                 .sort(gradeSort)
                 .map((gradeKey) => (
                   <div key={gradeKey} className="mb-3">
-                    <h3 className="text-xs font-medium text-gray-500 mb-1">
+                    <h3 className="text-xs font-medium text-gray-700 mb-1">
                       {gradeKey === 'Unspecified' ? 'Grade unspecified' : `Grade ${gradeKey}`}
                     </h3>
                     <ul className="space-y-1">
@@ -468,16 +468,16 @@ export default function TeamRoster({ session }) {
                               />
                             )}
                             {a.name}
-                            {a.bib && <span className="text-gray-400 ml-2">#{a.bib}</span>}
+                            {a.bib && <span className="text-gray-600 ml-2">#{a.bib}</span>}
                           </span>
                           <span className="flex items-center gap-3">
-                            <Link to={`/athlete/${a.id}`} className="text-gray-400 hover:text-gray-700 text-xs underline">
+                            <Link to={`/athlete/${a.id}`} className="text-gray-600 hover:text-gray-700 text-xs underline">
                               History
                             </Link>
                             {canEdit && (
                               <button
                                 onClick={() => removeAthlete(a.id)}
-                                className="text-gray-400 hover:text-red-600 text-xs"
+                                className="text-gray-600 hover:text-red-600 text-xs"
                               >
                                 Remove
                               </button>
