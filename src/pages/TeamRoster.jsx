@@ -25,6 +25,12 @@ export default function TeamRoster({ session }) {
   const [genderFilter, setGenderFilter] = useState('all')
   const [gradeFilter, setGradeFilter] = useState('all')
 
+  const [editingId, setEditingId] = useState(null)
+  const [editName, setEditName] = useState('')
+  const [editBib, setEditBib] = useState('')
+  const [editGrade, setEditGrade] = useState('')
+  const [editGender, setEditGender] = useState('')
+
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [moveTargetTeamId, setMoveTargetTeamId] = useState('')
   const [moving, setMoving] = useState(false)
@@ -146,6 +152,36 @@ export default function TeamRoster({ session }) {
       return
     }
     setBulkText('')
+    loadRoster()
+  }
+
+  function startEdit(a) {
+    setError('')
+    setEditingId(a.id)
+    setEditName(a.name || '')
+    setEditBib(a.bib || '')
+    setEditGrade(a.grade ? String(a.grade) : '')
+    setEditGender(a.gender || '')
+  }
+
+  async function saveEdit(e) {
+    e.preventDefault()
+    if (!editName.trim()) return
+    setError('')
+    const { error } = await supabase
+      .from('team_athletes')
+      .update({
+        name: editName.trim(),
+        bib: editBib.trim() || null,
+        grade: editGrade || null,
+        gender: editGender || null,
+      })
+      .eq('id', editingId)
+    if (error) {
+      setError(error.message)
+      return
+    }
+    setEditingId(null)
     loadRoster()
   }
 
@@ -454,7 +490,61 @@ export default function TeamRoster({ session }) {
                       {gradeKey === 'Unspecified' ? 'Grade unspecified' : `Grade ${gradeKey}`}
                     </h3>
                     <ul className="space-y-1">
-                      {groups[genderKey][gradeKey].map((a) => (
+                      {groups[genderKey][gradeKey].map((a) => editingId === a.id ? (
+                        <li key={a.id} className="border-b border-gray-100 py-2">
+                          <form onSubmit={saveEdit} className="flex flex-wrap gap-2 items-center">
+                            <input
+                              type="text"
+                              value={editName}
+                              onChange={(e) => setEditName(e.target.value)}
+                              placeholder="Athlete name"
+                              className="flex-1 min-w-[140px] border border-gray-400 rounded-lg px-3 py-2 text-sm"
+                              autoFocus
+                            />
+                            <input
+                              type="text"
+                              value={editBib}
+                              onChange={(e) => setEditBib(e.target.value)}
+                              placeholder="Bib"
+                              className="w-20 border border-gray-400 rounded-lg px-3 py-2 text-sm"
+                            />
+                            <select
+                              value={editGrade}
+                              onChange={(e) => setEditGrade(e.target.value)}
+                              className="border border-gray-400 rounded-lg px-3 py-2 text-sm"
+                            >
+                              <option value="">Grade</option>
+                              {GRADES.map((g) => (
+                                <option key={g} value={g}>
+                                  {g}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={editGender}
+                              onChange={(e) => setEditGender(e.target.value)}
+                              className="border border-gray-400 rounded-lg px-3 py-2 text-sm"
+                            >
+                              <option value="">Gender</option>
+                              {GENDERS.map((g) => (
+                                <option key={g.value} value={g.value}>
+                                  {g.label}
+                                </option>
+                              ))}
+                            </select>
+                            <button className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium">
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingId(null)}
+                              className="text-sm text-gray-700 underline"
+                            >
+                              Cancel
+                            </button>
+                          </form>
+                        </li>
+                      ) : (
                         <li
                           key={a.id}
                           className="flex items-center justify-between border-b border-gray-100 py-2 text-sm"
@@ -474,6 +564,11 @@ export default function TeamRoster({ session }) {
                             <Link to={`/athlete/${a.id}`} className="text-gray-600 hover:text-gray-700 text-xs underline">
                               History
                             </Link>
+                            {canEdit && (
+                              <button onClick={() => startEdit(a)} className="text-gray-700 hover:text-gray-900 text-xs underline">
+                                Edit
+                              </button>
+                            )}
                             {canEdit && (
                               <button
                                 onClick={() => removeAthlete(a.id)}
@@ -495,3 +590,4 @@ export default function TeamRoster({ session }) {
     </div>
   )
 }
+
