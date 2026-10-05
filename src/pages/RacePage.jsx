@@ -5,7 +5,7 @@ import { formatTime, downloadCSV } from '../lib/csv'
 import LiveClock from '../components/LiveClock'
 import ClockButton from '../components/ClockButton'
 import KeepAwake from '../components/KeepAwake'
-import RaceEditor from '../components/RaceEditor'
+import SessionEditor, { raceEditorConfig } from '../components/SessionEditor'
 import ExcelJS from 'exceljs'
 import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
@@ -185,11 +185,12 @@ export default function RacePage({ session }) {
           )}
 
           {isOwner && race.status !== 'setup' && showEdit && (
-            <RaceEditor
-              raceId={race.id}
-              raceAthletes={raceAthletes}
-              checkpoints={checkpoints}
+            <SessionEditor
+              config={raceEditorConfig(race.id)}
+              athletes={raceAthletes}
+              items={checkpoints}
               splits={splits}
+              rosterAthletes={teamAthletes}
               onChanged={() => {
                 loadRaceAthletes()
                 loadCheckpoints()
