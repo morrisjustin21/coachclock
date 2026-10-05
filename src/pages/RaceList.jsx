@@ -132,10 +132,10 @@ export default function RaceList({ session }) {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-xl font-semibold">Your races</h1>
         <div className="flex items-center gap-4">
-          <Link to="/join" className="text-sm text-gray-500 underline">
+          <Link to="/join" className="text-sm text-gray-700 underline">
             Join a race
           </Link>
-          <button onClick={signOut} className="text-sm text-gray-500 underline">
+          <button onClick={signOut} className="text-sm text-gray-700 underline">
             Sign out
           </button>
         </div>
@@ -170,9 +170,9 @@ export default function RaceList({ session }) {
       {error && <p className="text-sm text-red-600 mb-6">{error}</p>}
 
       {loading ? (
-        <p className="text-sm text-gray-500">Loading...</p>
+        <p className="text-sm text-gray-700">Loading...</p>
       ) : races.length === 0 ? (
-        <p className="text-sm text-gray-500">No races yet. Create one above.</p>
+        <p className="text-sm text-gray-700">No races yet. Create one above.</p>
       ) : (
         <ul className="space-y-2">
           {races.map((r) => (
@@ -182,19 +182,19 @@ export default function RaceList({ session }) {
                   <div className="font-medium text-sm flex items-center gap-2">
                     {r.name}
                     {r.team_id && (
-                      <span className="text-[10px] uppercase tracking-wide text-gray-400 border border-gray-200 rounded-full px-1.5 py-0.5">
+                      <span className="text-[10px] uppercase tracking-wide text-gray-600 border border-gray-200 rounded-full px-1.5 py-0.5">
                         {teams.find((t) => t.id === r.team_id)?.name || 'Team'}
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-gray-500">
+                  <div className="text-xs text-gray-700">
                     {new Date(r.created_at).toLocaleDateString()} · {r.status}
                   </div>
                 </Link>
                 {r.coach_id === session.user.id && (
                   <button
                     onClick={() => deleteRace(r)}
-                    className="text-gray-400 hover:text-red-600 text-sm px-2"
+                    className="text-gray-600 hover:text-red-600 text-sm px-2"
                     aria-label={`Delete ${r.name}`}
                   >
                     ✕
@@ -203,11 +203,11 @@ export default function RaceList({ session }) {
               </div>
               {r.coach_id === session.user.id && (
                 <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
-                  <span className="text-xs text-gray-400">Join code:</span>
+                  <span className="text-xs text-gray-600">Join code:</span>
                   <span className="text-xs font-mono font-semibold tracking-wider">{r.join_code}</span>
                   <button
                     onClick={() => copyCode(r)}
-                    className="text-xs text-gray-500 underline ml-1"
+                    className="text-xs text-gray-700 underline ml-1"
                   >
                     {copiedId === r.id ? 'Copied!' : 'Copy'}
                   </button>
