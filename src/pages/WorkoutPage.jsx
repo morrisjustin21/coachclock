@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { formatTime } from '../lib/csv'
+import LiveClock from '../components/LiveClock'
+import ClockButton from '../components/ClockButton'
+import KeepAwake from '../components/KeepAwake'
 import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
 
 const CHECKPOINT_PRESETS = ['1000m', '2000m', '3000m', '4000m', '1mi', '2mi', '3mi', 'Finish']
@@ -101,11 +104,11 @@ export default function WorkoutPage({ session }) {
     if (data) setSplits(data)
   }
 
-  if (loading || !workout) return <p className="text-center py-8 text-sm text-gray-500">Loading...</p>
+  if (loading || !workout) return <p className="text-center py-8 text-sm text-gray-700">Loading...</p>
 
   return (
     <div className="max-w-lg mx-auto px-4 py-8">
-      <Link to="/workouts" className="text-sm text-gray-500 underline">
+      <Link to="/workouts" className="text-sm text-gray-700 underline">
         &larr; All workouts
       </Link>
       <h1 className="text-xl font-semibold mt-2 mb-1">{workout.name}</h1>
@@ -234,13 +237,13 @@ function WorkoutSetup({ workout, teamAthletes, onStarted }) {
 
   return (
     <div>
-      <p className="text-sm text-gray-500 mb-4">Pick who's doing this workout.</p>
+      <p className="text-sm text-gray-700 mb-4">Pick who's doing this workout.</p>
 
       {teamAthletes.length > 0 && (
         <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-medium text-gray-700">Roster</h2>
-            <button onClick={toggleAll} className="text-xs text-gray-500 underline">
+            <button onClick={toggleAll} className="text-xs text-gray-700 underline">
               {selected.size === teamAthletes.length ? 'Deselect all' : 'Select all'}
             </button>
           </div>
@@ -277,7 +280,7 @@ function WorkoutSetup({ workout, teamAthletes, onStarted }) {
       {workout.mode === 'continuous' && (
         <>
           <h2 className="text-sm font-medium text-gray-700 mb-2">Checkpoints</h2>
-          <p className="text-xs text-gray-500 mb-2">Add each spot on the course you'll record a split, in order.</p>
+          <p className="text-xs text-gray-700 mb-2">Add each spot on the course you'll record a split, in order.</p>
           <div className="flex gap-2 mb-3">
             <select
               onChange={addPresetCheckpoint}
@@ -309,19 +312,19 @@ function WorkoutSetup({ workout, teamAthletes, onStarted }) {
             <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-6">
               {checkpointList.map((c, i) => (
                 <li key={c.key} className="flex items-center gap-2 px-3 py-2 text-sm">
-                  <span className="text-gray-400 w-5">{i + 1}</span>
+                  <span className="text-gray-600 w-5">{i + 1}</span>
                   <span className="flex-1">{c.label}</span>
-                  <button onClick={() => moveCheckpoint(i, -1)} disabled={i === 0} className="text-gray-400 disabled:opacity-30 px-1">
+                  <button onClick={() => moveCheckpoint(i, -1)} disabled={i === 0} className="text-gray-600 disabled:opacity-30 px-1">
                     ↑
                   </button>
                   <button
                     onClick={() => moveCheckpoint(i, 1)}
                     disabled={i === checkpointList.length - 1}
-                    className="text-gray-400 disabled:opacity-30 px-1"
+                    className="text-gray-600 disabled:opacity-30 px-1"
                   >
                     ↓
                   </button>
-                  <button onClick={() => removeCheckpoint(c.key)} className="text-gray-400 hover:text-red-600 px-1">
+                  <button onClick={() => removeCheckpoint(c.key)} className="text-gray-600 hover:text-red-600 px-1">
                     ✕
                   </button>
                 </li>
@@ -354,7 +357,6 @@ function computeElapsed(clockLike) {
 function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isOwner }) {
   const sortedReps = [...reps].sort((a, b) => a.rep_number - b.rep_number)
   const [activeRepId, setActiveRepId] = useState(null)
-  const rafRef = useRef(null)
   const printRef = useRef(null)
 
   useEffect(() => {
@@ -397,24 +399,10 @@ function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isO
   const prevRep = activeIndex > 0 ? sortedReps[activeIndex - 1] : null
 
   const [localRep, setLocalRep] = useState(activeRep)
-  const [elapsed, setElapsed] = useState(computeElapsed(activeRep))
 
   useEffect(() => {
     setLocalRep(activeRep)
   }, [activeRep?.running, activeRep?.started_at, activeRep?.accumulated_ms, activeRepId])
-
-  useEffect(() => {
-    cancelAnimationFrame(rafRef.current)
-    setElapsed(computeElapsed(localRep))
-    if (localRep?.running) {
-      function loop() {
-        setElapsed(computeElapsed(localRep))
-        rafRef.current = requestAnimationFrame(loop)
-      }
-      rafRef.current = requestAnimationFrame(loop)
-    }
-    return () => cancelAnimationFrame(rafRef.current)
-  }, [localRep?.running, localRep?.started_at, localRep?.accumulated_ms])
 
   const queueKey = activeRepId ? `workout-splits-${activeRepId}` : null
   const [localPendingSplits, setLocalPendingSplits] = useState(
@@ -606,22 +594,23 @@ function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isO
       ) : (
         <div className="print:hidden">
           <div className="text-center py-4">
-            <div className="text-5xl font-semibold tabular-nums">{formatTime(elapsed)}</div>
+            <LiveClock clock={localRep} className="text-6xl font-bold tabular-nums" />
           </div>
 
           {isOwner && (
-            <div className="flex gap-2 justify-center mb-4">
-              <button
+            <div className="flex flex-wrap gap-3 justify-center items-center mb-3">
+              <ClockButton
+                running={!!localRep?.running}
+                hasTime={(localRep?.accumulated_ms || 0) > 0}
                 onClick={handleStartStop}
-                className="min-w-[100px] border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium"
-              >
-                {localRep?.running ? 'Stop' : elapsed > 0 ? 'Resume' : 'Start'}
-              </button>
+              />
               <button onClick={finishWorkout} className="border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm font-medium">
                 Finish workout
               </button>
             </div>
           )}
+
+          {isOwner && <KeepAwake active={!!localRep?.running} />}
 
           <div className="bg-gray-900 text-white rounded-lg px-4 py-3 mb-3 flex items-center justify-between">
             <div>
@@ -648,14 +637,14 @@ function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isO
 
           <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-4">
             {waiting.length === 0 ? (
-              <li className="px-3 py-3 text-sm text-gray-400">Everyone has finished this rep.</li>
+              <li className="px-3 py-3 text-sm text-gray-600">Everyone has finished this rep.</li>
             ) : (
               waiting.map((a) => (
                 <li key={a.id}>
                   <button
                     onClick={() => recordFinish(a)}
                     disabled={!localRep?.running}
-                    className="w-full text-left px-3 py-3 text-sm hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+                    className="w-full text-left px-3 py-4 text-base font-medium hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
                   >
                     {a.name}
                   </button>
@@ -669,7 +658,7 @@ function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isO
               <tbody>
                 {finishedInOrder.map((s, i) => (
                   <tr key={s.id} className="border-b border-gray-100">
-                    <td className="py-2 text-gray-400 w-8">{i + 1}</td>
+                    <td className="py-2 text-gray-600 w-8">{i + 1}</td>
                     <td className="py-2">{s.label}</td>
                     <td className="py-2 text-right tabular-nums font-medium">{formatTime(s.recorded_time_ms)}</td>
                   </tr>
@@ -690,7 +679,7 @@ function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isO
         <div>
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-medium text-gray-700 print:hidden">All reps so far</h2>
-            <button onClick={() => window.print()} className="text-xs text-gray-500 underline print:hidden">
+            <button onClick={() => window.print()} className="text-xs text-gray-700 underline print:hidden">
               Print report
             </button>
           </div>
@@ -722,7 +711,7 @@ function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isO
                     {sortedReps.map((r) => (
                       <th
                         key={r.id}
-                        className="text-right py-2 print:py-1 px-2 print:px-1.5 text-xs print:text-[7.5px] font-normal text-gray-400 border-l border-gray-100 print:border-gray-200"
+                        className="text-right py-2 print:py-1 px-2 print:px-1.5 text-xs print:text-[7.5px] font-normal text-gray-600 border-l border-gray-100 print:border-gray-200"
                       >
                         {r.rep_number}
                       </th>
@@ -799,7 +788,6 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
   const sortedCheckpoints = [...checkpoints].sort((a, b) => a.rep_number - b.rep_number)
   const [activeCheckpointId, setActiveCheckpointId] = useState(null)
   const [showReport, setShowReport] = useState(false)
-  const rafRef = useRef(null)
   const printRef = useRef(null)
 
   useEffect(() => {
@@ -809,24 +797,10 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
   }, [checkpoints.length])
 
   const [localWorkout, setLocalWorkout] = useState(workout)
-  const [elapsed, setElapsed] = useState(computeElapsed(workout))
 
   useEffect(() => {
     setLocalWorkout(workout)
   }, [workout.running, workout.started_at, workout.accumulated_ms])
-
-  useEffect(() => {
-    cancelAnimationFrame(rafRef.current)
-    setElapsed(computeElapsed(localWorkout))
-    if (localWorkout.running) {
-      function loop() {
-        setElapsed(computeElapsed(localWorkout))
-        rafRef.current = requestAnimationFrame(loop)
-      }
-      rafRef.current = requestAnimationFrame(loop)
-    }
-    return () => cancelAnimationFrame(rafRef.current)
-  }, [localWorkout.running, localWorkout.started_at, localWorkout.accumulated_ms])
 
   useEffect(() => {
     function fitToPage() {
@@ -1019,12 +993,12 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
             body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
           }
         `}</style>
-        <button onClick={() => setShowReport(false)} className="text-sm text-gray-500 underline mb-4 print:hidden">
+        <button onClick={() => setShowReport(false)} className="text-sm text-gray-700 underline mb-4 print:hidden">
           &larr; Back to workout
         </button>
         <div className="flex items-center justify-between mb-4 print:hidden">
           <h2 className="text-lg font-semibold">Full report</h2>
-          <button onClick={() => window.print()} className="text-xs text-gray-500 underline">
+          <button onClick={() => window.print()} className="text-xs text-gray-700 underline">
             Print
           </button>
         </div>
@@ -1055,7 +1029,7 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
                     <th
                       key={cp.id}
                       colSpan={2}
-                      className="text-center py-2 print:py-1 px-2 print:px-1 border-l border-gray-200 uppercase print:tracking-wide text-gray-500 print:text-[6.5px] font-semibold"
+                      className="text-center py-2 print:py-1 px-2 print:px-1 border-l border-gray-200 uppercase print:tracking-wide text-gray-700 print:text-[6.5px] font-semibold"
                     >
                       {cp.label}
                     </th>
@@ -1066,10 +1040,10 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
                   <th className="sticky left-0 bg-white print:static"></th>
                   {reportCheckpoints.map((cp) => (
                     <>
-                      <th key={`${cp.id}-time`} className="text-xs print:text-[6.5px] font-normal text-gray-400 px-2 print:px-1 border-l border-gray-200">
+                      <th key={`${cp.id}-time`} className="text-xs print:text-[6.5px] font-normal text-gray-600 px-2 print:px-1 border-l border-gray-200">
                         Time
                       </th>
-                      <th key={`${cp.id}-split`} className="text-xs print:text-[6.5px] font-normal text-gray-400 px-2 print:px-1">
+                      <th key={`${cp.id}-split`} className="text-xs print:text-[6.5px] font-normal text-gray-600 px-2 print:px-1">
                         Split
                       </th>
                     </>
@@ -1079,7 +1053,7 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
               <tbody>
                 {rows.map(({ athlete, cells }, i) => (
                   <tr key={athlete.id} className={`border-t border-gray-100 print:border-gray-200 ${i % 2 === 1 ? 'print:bg-gray-50' : ''}`}>
-                    <td className="py-2 print:py-0.5 pr-4 print:pr-2 text-gray-400 sticky left-0 bg-white print:static print:bg-transparent">
+                    <td className="py-2 print:py-0.5 pr-4 print:pr-2 text-gray-600 sticky left-0 bg-white print:static print:bg-transparent">
                       {i + 1}
                     </td>
                     <td className="py-2 print:py-0.5 pr-4 print:pr-2 font-medium sticky left-0 bg-white print:static print:bg-transparent">
@@ -1090,7 +1064,7 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
                         <td key={`${c.checkpointId}-time`} className="text-right tabular-nums px-2 print:px-1 border-l border-gray-100 print:border-gray-200">
                           {formatTime(c.cumulative)}
                         </td>
-                        <td key={`${c.checkpointId}-split`} className="text-right tabular-nums px-2 print:px-1 text-gray-500">
+                        <td key={`${c.checkpointId}-split`} className="text-right tabular-nums px-2 print:px-1 text-gray-700">
                           {formatTime(c.segment)}
                         </td>
                       </>
@@ -1108,14 +1082,16 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
   return (
     <div>
       <div className="text-center py-4">
-        <div className="text-5xl font-semibold tabular-nums">{formatTime(elapsed)}</div>
+        <LiveClock clock={localWorkout} className="text-6xl font-bold tabular-nums" />
       </div>
 
       {isOwner && (
-        <div className="flex gap-2 justify-center mb-4">
-          <button onClick={handleStartStop} className="min-w-[100px] border border-gray-300 rounded-lg px-4 py-2 text-sm font-medium">
-            {localWorkout.running ? 'Stop' : elapsed > 0 ? 'Resume' : 'Start'}
-          </button>
+        <div className="flex flex-wrap gap-3 justify-center items-center mb-3">
+          <ClockButton
+            running={!!localWorkout.running}
+            hasTime={(localWorkout.accumulated_ms || 0) > 0}
+            onClick={handleStartStop}
+          />
           <button onClick={resetWorkout} className="border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm font-medium">
             Reset
           </button>
@@ -1124,6 +1100,8 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
           </button>
         </div>
       )}
+
+      {isOwner && <KeepAwake active={!!localWorkout.running} />}
 
       {sortedCheckpoints.length > 1 && (
         <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
@@ -1166,14 +1144,14 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
 
       <ul className="border border-gray-200 rounded-lg divide-y divide-gray-100 mb-4">
         {waiting.length === 0 ? (
-          <li className="px-3 py-3 text-sm text-gray-400">Everyone has come through.</li>
+          <li className="px-3 py-3 text-sm text-gray-600">Everyone has come through.</li>
         ) : (
           waiting.map((a) => (
             <li key={a.id}>
               <button
                 onClick={() => recordFinish(a)}
                 disabled={!localWorkout.running}
-                className="w-full text-left px-3 py-3 text-sm hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+                className="w-full text-left px-3 py-4 text-base font-medium hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
               >
                 {a.name}
               </button>
@@ -1187,7 +1165,7 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
           <tbody>
             {finishedInOrder.map((s, i) => (
               <tr key={s.id} className="border-b border-gray-100">
-                <td className="py-2 text-gray-400 w-8">{i + 1}</td>
+                <td className="py-2 text-gray-600 w-8">{i + 1}</td>
                 <td className="py-2">{s.label}</td>
                 <td className="py-2 text-right tabular-nums font-medium">{formatTime(s.recorded_time_ms)}</td>
               </tr>
