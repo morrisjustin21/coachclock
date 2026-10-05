@@ -5,6 +5,7 @@ import { formatTime, downloadCSV } from '../lib/csv'
 import LiveClock from '../components/LiveClock'
 import ClockButton from '../components/ClockButton'
 import KeepAwake from '../components/KeepAwake'
+import RaceEditor from '../components/RaceEditor'
 import ExcelJS from 'exceljs'
 import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
@@ -30,6 +31,7 @@ export default function RacePage({ session }) {
   const [loading, setLoading] = useState(true)
   const [showReport, setShowReport] = useState(false)
   const [showCheckin, setShowCheckin] = useState(false)
+  const [showEdit, setShowEdit] = useState(false)
 
   const isOwner = session && race && race.coach_id === session.user.id
   const canRecord = isOwner || isParticipant
@@ -159,13 +161,19 @@ export default function RacePage({ session }) {
       )}
       <h1 className="text-xl font-semibold mt-2 mb-1">{race.name}</h1>
 
-      {canRecord && race.status !== 'setup' && (
-        <button
-          onClick={() => setShowCheckin((v) => !v)}
-          className="text-xs text-gray-700 underline mb-4"
-        >
-          {showCheckin ? '← Back to race' : 'Check-in sheet'}
-        </button>
+      {race.status !== 'setup' && (canRecord || isOwner) && (
+        <div className="flex gap-4 mb-4">
+          {canRecord && !showEdit && (
+            <button onClick={() => setShowCheckin((v) => !v)} className="text-xs text-gray-700 underline">
+              {showCheckin ? '← Back to race' : 'Check-in sheet'}
+            </button>
+          )}
+          {isOwner && !showCheckin && (
+            <button onClick={() => setShowEdit((v) => !v)} className="text-xs text-gray-700 underline">
+              {showEdit ? '← Back to race' : 'Edit athletes & checkpoints'}
+            </button>
+          )}
+        </div>
       )}
 
       {showCheckin && canRecord && race.status !== 'setup' ? (
@@ -176,20 +184,37 @@ export default function RacePage({ session }) {
             <RaceSetup race={race} teamAthletes={teamAthletes} onStarted={loadAll} session={session} />
           )}
 
-          {race.status !== 'setup' && !showReport && (
-            <RaceLive
-              race={race}
+          {isOwner && race.status !== 'setup' && showEdit && (
+            <RaceEditor
+              raceId={race.id}
               raceAthletes={raceAthletes}
               checkpoints={checkpoints}
               splits={splits}
-              isOwner={isOwner}
-              canRecord={canRecord}
-              session={session}
-              onViewReport={() => setShowReport(true)}
+              onChanged={() => {
+                loadRaceAthletes()
+                loadCheckpoints()
+                loadSplits()
+              }}
             />
           )}
 
-          {race.status !== 'setup' && showReport && (
+          {/* Kept mounted (just hidden) while editing so the clock and offline sync keep running */}
+          {race.status !== 'setup' && !showReport && (
+            <div className={showEdit ? 'hidden' : ''}>
+              <RaceLive
+                race={race}
+                raceAthletes={raceAthletes}
+                checkpoints={checkpoints}
+                splits={splits}
+                isOwner={isOwner}
+                canRecord={canRecord}
+                session={session}
+                onViewReport={() => setShowReport(true)}
+              />
+            </div>
+          )}
+
+          {race.status !== 'setup' && showReport && !showEdit && (
             <RaceReport
               race={race}
               team={team}
@@ -643,6 +668,13 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
       setActiveCheckpointId(sortedCheckpoints[0].id)
     }
   }, [checkpoints.length])
+
+  // If the active checkpoint was removed in the editor, fall back to the first one
+  useEffect(() => {
+    if (activeCheckpointId && !checkpoints.some((c) => c.id === activeCheckpointId)) {
+      setActiveCheckpointId(sortedCheckpoints[0]?.id ?? null)
+    }
+  }, [checkpoints])
 
   // Personal bests per team_athlete_id + checkpoint label, drawn from every other race
   // in this athlete's history (same team if the race belongs to one, else same coach).
