@@ -105,18 +105,18 @@ export default function AthleteHistory() {
     return formatTime(ms)
   }
 
-  if (loading) return <p className="text-center py-8 text-sm text-gray-500">Loading...</p>
+  if (loading) return <p className="text-center py-8 text-sm text-gray-700">Loading...</p>
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-8">
-      <Link to="/roster" className="text-sm text-gray-500 underline">
+      <Link to="/roster" className="text-sm text-gray-700 underline">
         &larr; Roster
       </Link>
       <h1 className="text-xl font-semibold mt-2 mb-1">{athleteName}</h1>
-      <p className="text-sm text-gray-500 mb-6">Time at each checkpoint across the season</p>
+      <p className="text-sm text-gray-700 mb-6">Time at each checkpoint across the season</p>
 
       {chartData.length === 0 ? (
-        <p className="text-sm text-gray-400">No recorded race times yet for this athlete.</p>
+        <p className="text-sm text-gray-600">No recorded race times yet for this athlete.</p>
       ) : (
         <>
           <div className="h-64 mb-8">
@@ -151,7 +151,7 @@ export default function AthleteHistory() {
 
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-xs text-gray-400">
+              <tr className="text-left text-xs text-gray-600">
                 <th className="py-2 pr-2">Race</th>
                 {labels.map((label) => (
                   <th key={label} className="py-2 px-2 text-right">
@@ -165,7 +165,7 @@ export default function AthleteHistory() {
                 <tr key={row.raceId} className="border-t border-gray-100">
                   <td className="py-2 pr-2">
                     <div className="font-medium">{row.raceName}</div>
-                    <div className="text-xs text-gray-400">
+                    <div className="text-xs text-gray-600">
                       {new Date(row.date).toLocaleDateString()}
                     </div>
                   </td>
