@@ -20,8 +20,11 @@ export default function WorkoutPage({ session }) {
   const [splits, setSplits] = useState([])
   const [loading, setLoading] = useState(true)
   const [showEdit, setShowEdit] = useState(false)
+  const [isTeamMember, setIsTeamMember] = useState(false)
 
   const isOwner = session && workout && workout.coach_id === session.user.id
+  // Any coach on the workout's team can run it: start/stop clocks, record times, edit.
+  const canRun = !!(isOwner || isTeamMember)
 
   useEffect(() => {
     loadAll()
@@ -69,7 +72,19 @@ export default function WorkoutPage({ session }) {
       setTeam(null)
     }
 
-    if (data && data.coach_id === session?.user?.id) {
+    let member = false
+    if (data?.team_id && session) {
+      const { data: membership } = await supabase
+        .from('team_members')
+        .select('coach_id')
+        .eq('team_id', data.team_id)
+        .eq('coach_id', session.user.id)
+        .maybeSingle()
+      member = !!membership
+    }
+    setIsTeamMember(member)
+
+    if (data && (data.coach_id === session?.user?.id || member)) {
       let query = supabase.from('team_athletes').select('*').order('name', { ascending: true })
       query = data.team_id
         ? query.eq('team_id', data.team_id)
@@ -115,11 +130,11 @@ export default function WorkoutPage({ session }) {
       </Link>
       <h1 className="text-xl font-semibold mt-2 mb-1">{workout.name}</h1>
 
-      {isOwner && workout.status === 'setup' && (
+      {canRun && workout.status === 'setup' && (
         <WorkoutSetup workout={workout} teamAthletes={teamAthletes} onStarted={loadAll} />
       )}
 
-      {isOwner && workout.status !== 'setup' && (
+      {canRun && workout.status !== 'setup' && (
         <button onClick={() => setShowEdit((v) => !v)} className="text-xs text-gray-700 underline mb-4">
           {showEdit
             ? '← Back to workout'
@@ -127,7 +142,7 @@ export default function WorkoutPage({ session }) {
         </button>
       )}
 
-      {isOwner && workout.status !== 'setup' && showEdit && (
+      {canRun && workout.status !== 'setup' && showEdit && (
         <SessionEditor
           config={workoutEditorConfig(workout)}
           athletes={workoutAthletes}
@@ -152,7 +167,7 @@ export default function WorkoutPage({ session }) {
               workoutAthletes={workoutAthletes}
               checkpoints={reps}
               splits={splits}
-              isOwner={isOwner}
+              canRun={canRun}
             />
           ) : (
             <IntervalWorkoutLive
@@ -161,7 +176,7 @@ export default function WorkoutPage({ session }) {
               workoutAthletes={workoutAthletes}
               reps={reps}
               splits={splits}
-              isOwner={isOwner}
+              canRun={canRun}
             />
           )}
         </div>
@@ -382,7 +397,7 @@ function computeElapsed(clockLike) {
   return base
 }
 
-function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isOwner }) {
+function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, canRun }) {
   const sortedReps = [...reps].sort((a, b) => a.rep_number - b.rep_number)
   const [activeRepId, setActiveRepId] = useState(null)
   const printRef = useRef(null)
@@ -625,7 +640,7 @@ function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isO
             <LiveClock clock={localRep} className="text-6xl font-bold tabular-nums" />
           </div>
 
-          {isOwner && (
+          {canRun && (
             <div className="flex flex-wrap gap-3 justify-center items-center mb-3">
               <ClockButton
                 running={!!localRep?.running}
@@ -638,7 +653,7 @@ function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isO
             </div>
           )}
 
-          {isOwner && <KeepAwake active={!!localRep?.running} />}
+          {canRun && <KeepAwake active={!!localRep?.running} />}
 
           <div className="bg-gray-900 text-white rounded-lg px-4 py-3 mb-3 flex items-center justify-between">
             <div>
@@ -695,7 +710,7 @@ function IntervalWorkoutLive({ workout, team, workoutAthletes, reps, splits, isO
             </table>
           )}
 
-          {isOwner && (!workout.planned_reps || hasMorePlannedReps || isLastPlannedRep) && (
+          {canRun && (!workout.planned_reps || hasMorePlannedReps || isLastPlannedRep) && (
             <button onClick={startNextRep} className="w-full border border-gray-300 rounded-lg py-2 text-sm font-medium mb-6">
               {hasMorePlannedReps ? `Start next rep` : 'Add another rep'}
             </button>
@@ -812,7 +827,7 @@ function buildContinuousReportRows(checkpoints, workoutAthletes, splits) {
   return { sortedCheckpoints, rows }
 }
 
-function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, splits, isOwner }) {
+function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, splits, canRun }) {
   const sortedCheckpoints = [...checkpoints].sort((a, b) => a.rep_number - b.rep_number)
   const [activeCheckpointId, setActiveCheckpointId] = useState(null)
   const [showReport, setShowReport] = useState(false)
@@ -1120,7 +1135,7 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
         <LiveClock clock={localWorkout} className="text-6xl font-bold tabular-nums" />
       </div>
 
-      {isOwner && (
+      {canRun && (
         <div className="flex flex-wrap gap-3 justify-center items-center mb-3">
           <ClockButton
             running={!!localWorkout.running}
@@ -1136,7 +1151,7 @@ function ContinuousWorkoutLive({ workout, team, workoutAthletes, checkpoints, sp
         </div>
       )}
 
-      {isOwner && <KeepAwake active={!!localWorkout.running} />}
+      {canRun && <KeepAwake active={!!localWorkout.running} />}
 
       {sortedCheckpoints.length > 1 && (
         <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
