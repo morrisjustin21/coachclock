@@ -275,6 +275,8 @@ export default function TeamRoster({ session }) {
   }
 
   const canEdit = viewMode === 'mine'
+  // On the Whole team view you can still edit or remove the athletes YOU added
+  const canEditRow = (a) => canEdit || a.coach_id === session.user.id
   const showMoveTools = canEdit && activeTeamId === 'none' && teams.length > 0
 
   return (
@@ -400,7 +402,7 @@ export default function TeamRoster({ session }) {
 
       {!canEdit && (
         <p className="text-xs text-gray-600 mb-4">
-          Read-only view of everyone's athletes on this team. Switch to "My roster" to add or remove your own.
+          Everyone's athletes on this team. You can edit or remove the ones you added. Switch to "My roster" to add new athletes.
         </p>
       )}
 
@@ -564,12 +566,12 @@ export default function TeamRoster({ session }) {
                             <Link to={`/athlete/${a.id}`} className="text-gray-600 hover:text-gray-700 text-xs underline">
                               History
                             </Link>
-                            {canEdit && (
+                            {canEditRow(a) && (
                               <button onClick={() => startEdit(a)} className="text-gray-700 hover:text-gray-900 text-xs underline">
                                 Edit
                               </button>
                             )}
-                            {canEdit && (
+                            {canEditRow(a) && (
                               <button
                                 onClick={() => removeAthlete(a.id)}
                                 className="text-gray-600 hover:text-red-600 text-xs"
