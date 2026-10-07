@@ -5,6 +5,7 @@ import { formatTime, downloadCSV } from '../lib/csv'
 import LiveClock from '../components/LiveClock'
 import ClockButton from '../components/ClockButton'
 import KeepAwake from '../components/KeepAwake'
+import { useGunStart } from '../hooks/useGunStart'
 import SessionEditor, { raceEditorConfig } from '../components/SessionEditor'
 import ExcelJS from 'exceljs'
 import { enqueue, dequeue, getQueued, clearQueue } from '../lib/offlineQueue'
@@ -784,11 +785,26 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
     setQueueCount(getQueued(queueKey).length)
   }
 
+  // Starts the clock at a specific moment (used by both the Start button and the gun trigger)
+  async function startAt(startMs) {
+    const started_at = new Date(startMs).toISOString()
+    setLocalRace((prev) => ({ ...prev, running: true, started_at }))
+    await supabase.from('races').update({ running: true, started_at }).eq('id', race.id)
+  }
+
+  // Optional "start on sound of gun" - listens through the mic and starts the clock
+  const gun = useGunStart((startMs) => {
+    if (!localRace.running) startAt(startMs)
+  })
+
+  // If someone starts the clock with the button, stop listening
+  useEffect(() => {
+    if (localRace.running && gun.armed) gun.disarm()
+  }, [localRace.running])
+
   async function handleStartStop() {
     if (!localRace.running) {
-      const started_at = new Date().toISOString()
-      setLocalRace((prev) => ({ ...prev, running: true, started_at }))
-      await supabase.from('races').update({ running: true, started_at }).eq('id', race.id)
+      await startAt(Date.now())
     } else {
       const elapsedNow = computeElapsed(localRace)
       setLocalRace((prev) => ({ ...prev, running: false, started_at: null, accumulated_ms: elapsedNow }))
@@ -961,7 +977,49 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
         </div>
       )}
 
-      {canRecord && <KeepAwake active={!!localRace.running} />}
+      {canRecord && !localRace.running && (localRace.accumulated_ms || 0) === 0 && (
+        <div className="border border-gray-200 rounded-lg p-3 mb-4">
+          <button
+            onClick={gun.armed ? gun.disarm : gun.arm}
+            className={`w-full rounded-lg px-4 py-2 text-sm font-medium ${
+              gun.armed ? 'bg-green-600 text-white' : 'border border-gray-300 text-gray-800'
+            }`}
+          >
+            {gun.armed ? 'Listening for the gun… (tap to cancel)' : 'Start on sound of gun'}
+          </button>
+
+          {gun.armed && (
+            <>
+              <div className="mt-3 h-3 w-full overflow-hidden rounded bg-gray-200">
+                <div
+                  className="h-full bg-green-500"
+                  style={{ width: `${Math.min(gun.level * 100, 100)}%` }}
+                />
+              </div>
+              <label className="mt-3 block text-xs text-gray-700">
+                Sensitivity (slide left = more sensitive)
+                <input
+                  type="range"
+                  min="0.1"
+                  max="0.9"
+                  step="0.05"
+                  value={gun.threshold}
+                  onChange={(e) => gun.setThreshold(Number(e.target.value))}
+                  className="w-full"
+                />
+              </label>
+            </>
+          )}
+          {gun.error && <p className="mt-2 text-xs text-red-600">{gun.error}</p>}
+          {!gun.armed && !gun.error && (
+            <p className="mt-2 text-xs text-gray-600">
+              Optional. Place this phone near the starter, tap to arm, and the clock starts when the gun fires.
+            </p>
+          )}
+        </div>
+      )}
+
+      {canRecord && <KeepAwake active={!!localRace.running || gun.armed} />}
 
       {sortedCheckpoints.length > 1 && (
         <div className="flex gap-2 overflow-x-auto mb-4 pb-1">
