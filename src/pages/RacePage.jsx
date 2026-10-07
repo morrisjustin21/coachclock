@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { formatTime, downloadCSV } from '../lib/csv'
@@ -655,6 +655,22 @@ function computeElapsed(raceLike) {
   return base
 }
 
+// Turns what a coach types ("19:23.4", "1:05", "83.2", "1:02:03") into milliseconds.
+// Returns null if it isn't a usable time.
+function parseTimeInput(str) {
+  const text = String(str || '').trim()
+  if (!text) return null
+  const parts = text.split(':')
+  if (parts.length > 3) return null
+  let seconds = 0
+  for (const part of parts) {
+    const trimmed = part.trim()
+    if (trimmed === '' || isNaN(Number(trimmed)) || Number(trimmed) < 0) return null
+    seconds = seconds * 60 + Number(trimmed)
+  }
+  return Math.round(seconds * 1000)
+}
+
 function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord, session, onViewReport }) {
   const sortedCheckpoints = [...checkpoints].sort((a, b) => a.sort_order - b.sort_order)
   const [activeCheckpointId, setActiveCheckpointId] = useState(null)
@@ -745,10 +761,30 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
   const [removedIds, setRemovedIds] = useState(new Set())
   const [queueCount, setQueueCount] = useState(() => getQueued(queueKey).length)
 
+  // Coach override state: which row is being edited, what's typed, and corrected
+  // times shown immediately while they wait to sync
+  const [editingId, setEditingId] = useState(null)
+  const [editValue, setEditValue] = useState('')
+  const [editError, setEditError] = useState('')
+  const [editedTimes, setEditedTimes] = useState({})
+
   // Drop any locally-held tap once the server confirms it (it'll now appear in `splits`)
   useEffect(() => {
     const confirmedIds = new Set(splits.map((s) => s.id))
     setLocalPendingSplits((prev) => prev.filter((p) => !confirmedIds.has(p.id)))
+
+    // Drop a corrected time once the server shows the same value
+    setEditedTimes((prev) => {
+      const next = { ...prev }
+      let changed = false
+      splits.forEach((s) => {
+        if (next[s.id] !== undefined && next[s.id] === s.recorded_time_ms) {
+          delete next[s.id]
+          changed = true
+        }
+      })
+      return changed ? next : prev
+    })
   }, [splits])
 
   // Retry anything still queued: on mount, whenever connectivity returns, and every
@@ -775,6 +811,12 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
           ok = !error
         } else if (item.action === 'delete') {
           const { error } = await supabase.from('splits').delete().eq('id', item.payload.id)
+          ok = !error
+        } else if (item.action === 'update') {
+          const { error } = await supabase
+            .from('splits')
+            .update({ recorded_time_ms: item.payload.recorded_time_ms })
+            .eq('id', item.payload.id)
           ok = !error
         }
         if (ok) dequeue(queueKey, item.id)
@@ -841,9 +883,9 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
   const visiblePending = localPendingSplits.filter(
     (p) => p.checkpoint_id === activeCheckpointId && !confirmedAthleteIdsActive.has(p.athlete_id)
   )
-  const finishedInOrder = [...visibleConfirmed, ...visiblePending].sort(
-    (a, b) => a.recorded_time_ms - b.recorded_time_ms
-  )
+  const finishedInOrder = [...visibleConfirmed, ...visiblePending]
+    .map((s) => (editedTimes[s.id] !== undefined ? { ...s, recorded_time_ms: editedTimes[s.id] } : s))
+    .sort((a, b) => a.recorded_time_ms - b.recorded_time_ms)
   const finishedAthleteIds = new Set(finishedInOrder.map((s) => s.athlete_id))
 
   let waiting = raceAthletes.filter((a) => !finishedAthleteIds.has(a.id))
@@ -886,7 +928,11 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
 
   function undoLast() {
     if (finishedInOrder.length === 0) return
-    const last = finishedInOrder[finishedInOrder.length - 1]
+    removeSplit(finishedInOrder[finishedInOrder.length - 1])
+  }
+
+  // Removes any one recorded time (used by Undo and by the coach override)
+  function removeSplit(last) {
 
     setLocalPendingSplits((prev) => prev.filter((p) => p.id !== last.id))
 
@@ -903,6 +949,116 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
       flushQueueNow()
     }
     setQueueCount(getQueued(queueKey).length)
+  }
+
+  function startEdit(id, ms) {
+    setEditingId(id)
+    setEditValue(ms != null ? formatTime(ms) : '')
+    setEditError('')
+  }
+
+  function cancelEdit() {
+    setEditingId(null)
+    setEditValue('')
+    setEditError('')
+  }
+
+  // Coach override: correct the time on an existing recorded split
+  function saveEdit(split) {
+    const ms = parseTimeInput(editValue)
+    if (ms == null || ms <= 0) {
+      setEditError('Enter a time like 19:23.4 or 1:05')
+      return
+    }
+
+    // If the original tap hasn't left the device yet, fix the queued copy too
+    const queuedInsert = getQueued(queueKey).find((q) => q.action === 'insert' && q.payload.id === split.id)
+    if (queuedInsert) {
+      dequeue(queueKey, split.id)
+      enqueue(queueKey, {
+        id: split.id,
+        action: 'insert',
+        payload: { ...queuedInsert.payload, recorded_time_ms: ms },
+      })
+    }
+
+    setEditedTimes((prev) => ({ ...prev, [split.id]: ms }))
+    enqueue(queueKey, {
+      id: `update-${split.id}-${Date.now()}`,
+      action: 'update',
+      payload: { id: split.id, recorded_time_ms: ms },
+    })
+    setQueueCount(getQueued(queueKey).length)
+    flushQueueNow()
+    cancelEdit()
+  }
+
+  // Coach override: delete one specific recorded time
+  function deleteTime(split) {
+    const confirmed = window.confirm(`Delete ${split.label}'s time at ${activeCheckpoint?.label}?`)
+    if (!confirmed) return
+    setEditedTimes((prev) => {
+      const next = { ...prev }
+      delete next[split.id]
+      return next
+    })
+    removeSplit(split)
+    cancelEdit()
+  }
+
+  // Coach override: type in a time for a runner whose tap was missed
+  function saveManual(athlete) {
+    const ms = parseTimeInput(editValue)
+    if (ms == null || ms <= 0) {
+      setEditError('Enter a time like 19:23.4 or 1:05')
+      return
+    }
+    if (!activeCheckpoint) return
+
+    const splitRow = {
+      id: crypto.randomUUID(),
+      race_id: race.id,
+      athlete_id: athlete.id,
+      checkpoint_id: activeCheckpoint.id,
+      label: athlete.name,
+      recorded_time_ms: ms,
+    }
+    setLocalPendingSplits((prev) => [...prev, splitRow])
+    enqueue(queueKey, { id: splitRow.id, action: 'insert', payload: splitRow })
+    setQueueCount(getQueued(queueKey).length)
+    flushQueueNow()
+    cancelEdit()
+  }
+
+  function editorControls(onSave, onDelete) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          inputMode="decimal"
+          autoFocus
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onSave()
+          }}
+          placeholder="m:ss.s"
+          className="border border-gray-300 rounded-lg px-2 py-1 text-sm w-28 tabular-nums"
+        />
+        <button onClick={onSave} className="bg-gray-900 text-white rounded-lg px-3 py-1 text-xs font-medium">
+          Save
+        </button>
+        <button onClick={cancelEdit} className="text-xs text-gray-700 underline">
+          Cancel
+        </button>
+        {onDelete && (
+          <button onClick={onDelete} className="text-xs text-red-600 underline ml-auto">
+            Delete time
+          </button>
+        )}
+        {editError && <p className="w-full text-xs text-red-600">{editError}</p>}
+      </div>
+    )
   }
 
   function checkpointCount(cp) {
@@ -1054,7 +1210,10 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
               Undo
             </button>
           </div>
-          <p className="text-sm text-gray-700 mb-2">Tap a name below as each runner reaches this point</p>
+          <p className="text-sm text-gray-700 mb-2">
+            Tap a name below as each runner reaches this point. Tap a time in the results to correct it, or use
+            &ldquo;Enter time&rdquo; if a tap was missed.
+          </p>
 
           {queueCount > 0 && (
             <div className="flex items-center justify-between bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mb-3 text-xs text-yellow-800">
@@ -1074,14 +1233,29 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
             ) : (
               waiting.map((a) => (
                 <li key={a.id}>
-                  <button
-                    onClick={() => recordFinish(a)}
-                    disabled={!localRace.running}
-                    className="w-full text-left px-3 py-4 text-base font-medium hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
-                  >
-                    {a.name}
-                    {a.bib && <span className="text-gray-600 ml-2">#{a.bib}</span>}
-                  </button>
+                  {editingId === `new-${a.id}` ? (
+                    <div className="px-3 py-3">
+                      <div className="text-sm font-medium mb-2">Enter time for {a.name}</div>
+                      {editorControls(() => saveManual(a), null)}
+                    </div>
+                  ) : (
+                    <div className="flex items-center">
+                      <button
+                        onClick={() => recordFinish(a)}
+                        disabled={!localRace.running}
+                        className="flex-1 text-left px-3 py-4 text-base font-medium hover:bg-gray-50 disabled:opacity-40 disabled:hover:bg-transparent"
+                      >
+                        {a.name}
+                        {a.bib && <span className="text-gray-600 ml-2">#{a.bib}</span>}
+                      </button>
+                      <button
+                        onClick={() => startEdit(`new-${a.id}`, null)}
+                        className="px-3 py-4 text-xs text-gray-600 underline whitespace-nowrap"
+                      >
+                        Enter time
+                      </button>
+                    </div>
+                  )}
                 </li>
               ))
             )}
@@ -1116,7 +1290,8 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
         <table className="w-full text-sm mb-6">
           <tbody>
             {finishedInOrder.map((s, i) => (
-              <tr key={s.id} className="border-b border-gray-100">
+              <Fragment key={s.id}>
+              <tr className="border-b border-gray-100">
                 <td className="py-2 text-gray-600 w-8">{i + 1}</td>
                 <td className="py-2">
                   {s.label}
@@ -1126,8 +1301,28 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
                     </span>
                   )}
                 </td>
-                <td className="py-2 text-right tabular-nums font-medium">{formatTime(s.recorded_time_ms)}</td>
+                <td className="py-2 text-right tabular-nums font-medium">
+                  {canRecord ? (
+                    <button
+                      onClick={() => startEdit(s.id, s.recorded_time_ms)}
+                      className="tabular-nums font-medium underline decoration-dotted decoration-gray-400"
+                    >
+                      {formatTime(s.recorded_time_ms)}
+                    </button>
+                  ) : (
+                    formatTime(s.recorded_time_ms)
+                  )}
+                </td>
               </tr>
+              {canRecord && editingId === s.id && (
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  <td colSpan={3} className="py-2 px-2">
+                    <div className="text-xs text-gray-700 mb-1">Correct time for {s.label}</div>
+                    {editorControls(() => saveEdit(s), () => deleteTime(s))}
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
           </tbody>
         </table>
