@@ -857,6 +857,28 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
     }
   }
 
+  async function finishRace() {
+    const confirmed = window.confirm(
+      'Mark this race as finished? It stays at the top of your list for 24 hours, then moves to Completed races. You can reopen it.'
+    )
+    if (!confirmed) return
+
+    const patch = { completed_at: new Date().toISOString() }
+    if (localRace.running) {
+      // Stop the clock too, so it isn't left running on a finished race
+      patch.running = false
+      patch.started_at = null
+      patch.accumulated_ms = computeElapsed(localRace)
+    }
+    setLocalRace((prev) => ({ ...prev, ...patch }))
+    await supabase.from('races').update(patch).eq('id', race.id)
+  }
+
+  async function reopenRace() {
+    setLocalRace((prev) => ({ ...prev, completed_at: null }))
+    await supabase.from('races').update({ completed_at: null }).eq('id', race.id)
+  }
+
   async function resetRace() {
     const confirmed = window.confirm(
       'Reset this race? This clears the clock and permanently deletes every recorded time at every checkpoint. This cannot be undone.'
@@ -1123,12 +1145,29 @@ function RaceLive({ race, raceAthletes, checkpoints, splits, isOwner, canRecord,
             onClick={handleStartStop}
           />
           {isOwner && (
-            <button
-              onClick={resetRace}
-              className="border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm font-medium"
-            >
-              Reset race
-            </button>
+            <>
+              <button
+                onClick={resetRace}
+                className="border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm font-medium"
+              >
+                Reset race
+              </button>
+              {localRace.completed_at ? (
+                <button
+                  onClick={reopenRace}
+                  className="border border-gray-300 text-gray-900 rounded-lg px-4 py-2 text-sm font-medium"
+                >
+                  Reopen race
+                </button>
+              ) : (
+                <button
+                  onClick={finishRace}
+                  className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium"
+                >
+                  Finish race
+                </button>
+              )}
+            </>
           )}
         </div>
       )}
