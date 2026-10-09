@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
+import { loadMyRaces, deleteRace, splitRaces } from '../lib/loadMyRaces'
+import RaceRow from '../components/RaceRow'
 
 function generateJoinCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // no 0/O/1/I to avoid confusion
@@ -19,52 +21,25 @@ export default function RaceList({ session }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [copiedId, setCopiedId] = useState(null)
+  const [now, setNow] = useState(Date.now())
   const navigate = useNavigate()
 
   useEffect(() => {
-    loadRaces()
+    load()
   }, [])
 
-  async function loadRaces() {
+  // Re-check the 24-hour cutoff every minute so a race drops off the top
+  // section on its own, even if the screen stays open.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60000)
+    return () => clearInterval(t)
+  }, [])
+
+  async function load() {
     setLoading(true)
-
-    const { data: memberships } = await supabase
-      .from('team_members')
-      .select('team_id')
-      .eq('coach_id', session.user.id)
-    const teamIds = (memberships || []).map((m) => m.team_id)
-
-    let myTeams = []
-    if (teamIds.length > 0) {
-      const { data: teamRows } = await supabase
-        .from('teams')
-        .select('id, name')
-        .in('id', teamIds)
-        .order('name', { ascending: true })
-      myTeams = teamRows || []
-    }
-    setTeams(myTeams)
-
-    const { data: ownRaces } = await supabase
-      .from('races')
-      .select('*')
-      .eq('coach_id', session.user.id)
-      .order('created_at', { ascending: false })
-
-    let combined = ownRaces || []
-
-    if (teamIds.length > 0) {
-      const { data: teamRaces } = await supabase
-        .from('races')
-        .select('*')
-        .in('team_id', teamIds)
-        .order('created_at', { ascending: false })
-      const existingIds = new Set(combined.map((r) => r.id))
-      combined = [...combined, ...(teamRaces || []).filter((r) => !existingIds.has(r.id))]
-      combined.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-    }
-
-    setRaces(combined)
+    const result = await loadMyRaces(session.user.id)
+    setTeams(result.teams)
+    setRaces(result.races)
     setLoading(false)
   }
 
@@ -100,12 +75,9 @@ export default function RaceList({ session }) {
     setError('Could not create race after a few attempts. Please try again.')
   }
 
-  async function deleteRace(race) {
-    const confirmed = window.confirm(
-      `Delete "${race.name}"? This permanently removes its roster and all recorded times.`
-    )
-    if (!confirmed) return
-    const { error } = await supabase.from('races').delete().eq('id', race.id)
+  async function handleDelete(race) {
+    const { cancelled, error } = await deleteRace(race)
+    if (cancelled) return
     if (error) {
       setError(error.message)
       return
@@ -125,6 +97,24 @@ export default function RaceList({ session }) {
 
   async function signOut() {
     await supabase.auth.signOut()
+  }
+
+  const { top, upcoming, older } = splitRaces(races, now)
+  const recent = older.slice(0, 3)
+
+  function row(r, variant) {
+    return (
+      <RaceRow
+        key={r.id}
+        race={r}
+        teams={teams}
+        userId={session.user.id}
+        variant={variant}
+        onDelete={handleDelete}
+        onCopy={copyCode}
+        copiedId={copiedId}
+      />
+    )
   }
 
   return (
@@ -170,52 +160,45 @@ export default function RaceList({ session }) {
       {error && <p className="text-sm text-red-600 mb-6">{error}</p>}
 
       {loading ? (
-        <p className="text-sm text-gray-700">Loading...</p>
+        <p className="text-sm text-gray-700 mt-6">Loading...</p>
       ) : races.length === 0 ? (
-        <p className="text-sm text-gray-700">No races yet. Create one above.</p>
+        <p className="text-sm text-gray-700 mt-6">No races yet. Create one above.</p>
       ) : (
-        <ul className="space-y-2">
-          {races.map((r) => (
-            <li key={r.id} className="border border-gray-200 rounded-lg px-4 py-3">
-              <div className="flex items-center gap-2">
-                <Link to={`/race/${r.id}`} className="flex-1 block hover:opacity-70">
-                  <div className="font-medium text-sm flex items-center gap-2">
-                    {r.name}
-                    {r.team_id && (
-                      <span className="text-[10px] uppercase tracking-wide text-gray-600 border border-gray-200 rounded-full px-1.5 py-0.5">
-                        {teams.find((t) => t.id === r.team_id)?.name || 'Team'}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-gray-700">
-                    {new Date(r.created_at).toLocaleDateString()} · {r.status}
-                  </div>
+        <div className="mt-6 space-y-6">
+          {top.length > 0 && (
+            <section>
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-red-600 mb-2">
+                Live &amp; just finished
+              </h2>
+              <ul className="space-y-2">
+                {top.map((r) => row(r, r.completed_at ? 'justFinished' : 'live'))}
+              </ul>
+            </section>
+          )}
+
+          {upcoming.length > 0 && (
+            <section>
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-900 mb-2">
+                Upcoming
+              </h2>
+              <ul className="space-y-2">{upcoming.map((r) => row(r, 'upcoming'))}</ul>
+            </section>
+          )}
+
+          {older.length > 0 && (
+            <section>
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                  Recent results
+                </h2>
+                <Link to="/races/completed" className="text-xs text-gray-700 underline">
+                  View all completed races ({older.length}) →
                 </Link>
-                {r.coach_id === session.user.id && (
-                  <button
-                    onClick={() => deleteRace(r)}
-                    className="text-gray-600 hover:text-red-600 text-sm px-2"
-                    aria-label={`Delete ${r.name}`}
-                  >
-                    ✕
-                  </button>
-                )}
               </div>
-              {r.coach_id === session.user.id && (
-                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
-                  <span className="text-xs text-gray-600">Join code:</span>
-                  <span className="text-xs font-mono font-semibold tracking-wider">{r.join_code}</span>
-                  <button
-                    onClick={() => copyCode(r)}
-                    className="text-xs text-gray-700 underline ml-1"
-                  >
-                    {copiedId === r.id ? 'Copied!' : 'Copy'}
-                  </button>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
+              <ul className="space-y-2">{recent.map((r) => row(r, 'done'))}</ul>
+            </section>
+          )}
+        </div>
       )}
     </div>
   )
