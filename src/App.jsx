@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { supabase } from './supabaseClient'
 import Login from './pages/Login'
 import RaceList from './pages/RaceList'
+import CompletedRaces from './pages/CompletedRaces'
 import RacePage from './pages/RacePage'
 import TeamRoster from './pages/TeamRoster'
 import JoinRace from './pages/JoinRace'
@@ -96,6 +97,14 @@ export default function App() {
             element={
               <Gated session={session} accessStatus={accessStatus}>
                 <RaceList session={session} />
+              </Gated>
+            }
+          />
+          <Route
+            path="/races/completed"
+            element={
+              <Gated session={session} accessStatus={accessStatus}>
+                <CompletedRaces session={session} />
               </Gated>
             }
           />
