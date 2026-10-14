@@ -33,7 +33,10 @@ export default function Workouts({ session }) {
         .select('id, name')
         .in('id', teamIds)
         .order('name', { ascending: true })
-      setTeams(teamRows || [])
+      const rows = teamRows || []
+      setTeams(rows)
+      // Default to the coach's team so new workouts are shared with every coach on it
+      if (rows.length > 0) setSelectedTeamId((prev) => (prev === 'none' ? rows[0].id : prev))
     }
 
     const { data: ownWorkouts } = await supabase
@@ -166,22 +169,34 @@ export default function Workouts({ session }) {
           </p>
         )}
 
-        {teams.length > 0 && (
-          <select
-            value={selectedTeamId}
-            onChange={(e) => setSelectedTeamId(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-          >
-            <option value="none">No team</option>
-            {teams.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
+        {teams.length === 1 && (
+          <p className="text-xs text-gray-700">
+            Shared with every coach on <span className="font-semibold">{teams[0].name}</span>.
+          </p>
+        )}
+        {teams.length > 1 && (
+          <div>
+            <label className="block text-xs text-gray-700 mb-1">
+              Share with every coach on:
+            </label>
+            <select
+              value={selectedTeamId}
+              onChange={(e) => setSelectedTeamId(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+            >
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </div>
         )}
 
-        <button className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium">
+        <button
+          disabled={loading}
+          className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50"
+        >
           Start setup
         </button>
       </form>
